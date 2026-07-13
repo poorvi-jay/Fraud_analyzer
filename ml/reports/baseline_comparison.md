@@ -1,14 +1,14 @@
 # Baseline comparison: anomaly-only vs. multi-agent pipeline
 
-Held-out test set: 7185 transactions (99 fraud, 7086 legit),
+Held-out test set: 30000 transactions (39 fraud, 29961 legit),
 never seen during anomaly model training (see `ml/train_anomaly_model.py`).
 
 ## Anomaly model alone (baseline)
 
 | Metric | Value |
 |---|---|
-| False positive rate | 1.52% |
-| False negative rate | 9.09% |
+| False positive rate | 0.60% |
+| False negative rate | 2.56% |
 
 The anomaly model only sees transaction-intrinsic statistics (amount,
 balance movement, type) -- no per-user profile. It reliably catches large,
@@ -21,11 +21,11 @@ no way to know what's normal *for that user*.
 
 | Metric | Value |
 |---|---|
-| Strict false positive rate (wrongful auto-block) | 0.14% |
-| Strict false negative rate (fraud auto-allowed) | 3.03% |
-| Broad false positive rate (block+escalate on legit) | 2.06% |
-| Broad false negative rate (allowed fraud) | 3.03% |
-| Escalation rate (sent to a human) | 2.31% |
+| Strict false positive rate (wrongful auto-block) | 0.43% |
+| Strict false negative rate (fraud auto-allowed) | 2.56% |
+| Broad false positive rate (block+escalate on legit) | 1.03% |
+| Broad false negative rate (allowed fraud) | 2.56% |
+| Escalation rate (sent to a human) | 0.71% |
 
 Escalation is not counted as an error in the strict metrics: when the
 anomaly and context agents disagree, the pipeline sends the case to a human

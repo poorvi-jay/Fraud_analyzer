@@ -1,16 +1,16 @@
 {
-  "roc_auc": 0.9939210051403108,
+  "roc_auc": 0.9993001026964523,
   "threshold": 0.5,
   "confusion_matrix": {
-    "tn": 6978,
-    "fp": 108,
-    "fn": 9,
-    "tp": 90
+    "tn": 1578544,
+    "fp": 10058,
+    "fn": 6,
+    "tp": 2047
   },
-  "false_positive_rate": 0.015241320914479255,
-  "false_negative_rate": 0.09090909090909091,
-  "n_train": 21554,
-  "n_test": 7185,
+  "false_positive_rate": 0.006331352975761078,
+  "false_negative_rate": 0.0029225523623964927,
+  "n_train": 4771965,
+  "n_test": 1590655,
   "feature_columns": [
     "amount",
     "origin_balance_before",

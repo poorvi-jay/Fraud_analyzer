@@ -16,6 +16,7 @@ same fields the API receives at review time (no destination-account data is
 available at inference, so none is used as a model feature).
 """
 import argparse
+import json
 from pathlib import Path
 
 import numpy as np
@@ -172,8 +173,15 @@ def adapt_real_paysim(raw: pd.DataFrame, rng: np.random.Generator) -> tuple[pd.D
     """Best-effort adapter for the real Kaggle PaySim CSV -> our schema.
 
     Real PaySim has no user history/location, so profiles are still
-    synthesized here, just anchored to each nameOrig's actual observed
-    amounts rather than fully random ones.
+    synthesized here. It also turns out real PaySim doesn't simulate
+    returning customers at all -- ~99.9% of nameOrig values appear in
+    exactly one transaction. That makes a per-user median amount degenerate
+    (it's just that one transaction's own amount, so amount_to_typical_ratio
+    is ~1.0 for almost everyone and the mule-pattern policy rule never
+    fires). Users with too little history to form a real "typical" fall
+    back to the population median for their transaction type instead --
+    still profile-relative in spirit, just relative to a type-level norm
+    rather than genuine personal history, which real PaySim doesn't have.
     """
     raw = raw.rename(
         columns={
@@ -197,13 +205,23 @@ def adapt_real_paysim(raw: pd.DataFrame, rng: np.random.Generator) -> tuple[pd.D
     country_map = dict(zip(user_ids, home_country))
     travel_map = dict(zip(user_ids, travel_frequency))
 
-    typical = raw.groupby("user_id")["amount"].median()
+    # Vectorized -- looping .loc[] per user_id over millions of rows (an
+    # earlier version of this function did exactly that) is far too slow.
+    MIN_TXNS_FOR_PERSONAL_TYPICAL = 3
+    type_typical = raw.groupby("transaction_type")["amount"].median()
+    per_user = raw.groupby("user_id")["amount"].agg(["median", "count"]).reindex(user_ids)
+    first_type = raw.groupby("user_id")["transaction_type"].first().reindex(user_ids)
+
+    fallback_typical = first_type.map(type_typical).fillna(type_typical.median())
+    has_enough_history = per_user["count"] >= MIN_TXNS_FOR_PERSONAL_TYPICAL
+    typical_amount = per_user["median"].where(has_enough_history, fallback_typical).round(2)
+
     profiles = pd.DataFrame(
         {
             "user_id": user_ids,
             "account_created": account_created,
             "home_country": [country_map[u] for u in user_ids],
-            "typical_transaction_amount": [round(float(typical.get(u, 100.0)), 2) for u in user_ids],
+            "typical_transaction_amount": typical_amount.to_numpy(),
             "travel_frequency": [travel_map[u] for u in user_ids],
         }
     )
@@ -248,6 +266,20 @@ def main():
     fraud_rate = transactions["is_fraud_ground_truth"].mean()
     print(f"Wrote {len(transactions)} transactions ({fraud_rate:.3%} fraud) "
           f"and {len(profiles)} user profiles to {DATA_DIR}")
+
+    # policy_agent's "large reporting threshold" rule is meant to catch
+    # genuinely unusual amounts. A fixed dollar figure doesn't transfer
+    # across datasets of very different scale (real PaySim's amounts run
+    # ~1000x our synthetic data's), so calibrate it here to this dataset's
+    # own distribution instead of hardcoding it in policy_agent.py.
+    large_reporting_threshold = round(float(transactions["amount"].quantile(0.995)), 2)
+    calibration = {"large_reporting_threshold": large_reporting_threshold}
+    models_dir = DATA_DIR.parent / "ml" / "models"
+    models_dir.mkdir(parents=True, exist_ok=True)
+    with open(models_dir / "policy_calibration.json", "w") as f:
+        json.dump(calibration, f, indent=2)
+    print(f"Calibrated large_reporting_threshold = ${large_reporting_threshold:,.2f} "
+          f"(99.5th percentile of amount) -> {models_dir / 'policy_calibration.json'}")
 
 
 if __name__ == "__main__":

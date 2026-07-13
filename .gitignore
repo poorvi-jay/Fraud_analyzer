@@ -15,14 +15,19 @@ dist/
 .env
 .env.local
 
-# The real Kaggle PaySim CSV (if you drop one in) is never committed --
-# licensing/size. The synthetic stand-in data/*.csv IS committed (~2MB, see
-# ml/prepare_paysim.py), along with ml/models/ and ml/reports/, so the repo
-# is a clickable demo without a training step first.
-data/paysim.csv
+# data/*.csv is never committed -- regenerable via ml/prepare_paysim.py, and
+# can be anywhere from ~2MB (synthetic stand-in) to 500MB+ (derived from the
+# real Kaggle PaySim dataset, which is itself excluded below), well over
+# GitHub's 100MB per-file limit in the real-data case. ml/models/ and
+# ml/reports/ (much smaller, row-count-independent) stay committed so the
+# repo is still a clickable demo without a training step first.
+data/*.csv
 *.db
 *.sqlite3
 
 # OS / editor
 .DS_Store
 *.swp
+
+# Claude Code local session config
+.claude/

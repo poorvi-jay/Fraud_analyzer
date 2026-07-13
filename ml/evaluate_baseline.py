@@ -4,12 +4,20 @@ train_anomaly_model.py, so it's provably the data the model never trained
 on) through (a) the anomaly model alone and (b) the full four-agent
 pipeline, and compares false positive / false negative rates.
 
-Agents are called directly (no DB, no HTTP) for speed across thousands of
-rows -- LLM calls are skipped unless LLM_PROVIDER=anthropic is set, since
-the mock heuristic is what the public demo runs by default anyway.
+Agents are called directly (no DB, no HTTP) for speed -- LLM calls are
+skipped unless LLM_PROVIDER=anthropic is set, since the mock heuristic is
+what the public demo runs by default anyway. Each row still costs a SHAP
+explanation (for the anomaly agent's reasoning text), which is too slow to
+run unsampled against a multi-million-row test split (e.g. the real PaySim
+dataset), so by default this evaluates a stratified sample rather than
+every row -- pass --sample-size 0 to disable sampling and use the full
+test set (fine for the ~29k-row synthetic dataset, not recommended for
+6M+-row real PaySim).
 """
+import argparse
 import json
 import sys
+import time
 from pathlib import Path
 
 import pandas as pd
@@ -22,12 +30,22 @@ from app.agents import anomaly_agent, context_agent, coordinator_agent, policy_a
 DATA_DIR = ROOT / "data"
 REPORTS_DIR = ROOT / "ml" / "reports"
 
+DEFAULT_SAMPLE_SIZE = 30_000
+PROGRESS_EVERY = 2_000
+
 
 def _rate(numerator: int, denominator: int) -> float:
     return numerator / denominator if denominator else 0.0
 
 
 def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--sample-size", type=int, default=DEFAULT_SAMPLE_SIZE,
+        help=f"Stratified sample size of the test split to evaluate (default {DEFAULT_SAMPLE_SIZE}); 0 = use the full test set.",
+    )
+    args = parser.parse_args()
+
     transactions = pd.read_csv(DATA_DIR / "transactions.csv", parse_dates=["occurred_at"])
     profiles = pd.read_csv(DATA_DIR / "user_profiles.csv", parse_dates=["account_created"]).set_index("user_id")
 
@@ -36,15 +54,34 @@ def main():
     _, test_transactions = train_test_split(
         transactions, test_size=0.25, random_state=42, stratify=transactions["is_fraud_ground_truth"]
     )
+
+    if args.sample_size and len(test_transactions) > args.sample_size:
+        test_transactions, _ = train_test_split(
+            test_transactions,
+            train_size=args.sample_size,
+            random_state=42,
+            stratify=test_transactions["is_fraud_ground_truth"],
+        )
+        print(f"Test split has {len(test_transactions):,}+ rows -- evaluating a stratified "
+              f"sample of {args.sample_size:,} (pass --sample-size 0 to use the full set).")
+
     print(f"Evaluating on {len(test_transactions)} held-out transactions "
           f"({test_transactions['is_fraud_ground_truth'].mean():.3%} fraud).")
+    start = time.time()
 
     baseline_tp = baseline_fp = baseline_tn = baseline_fn = 0
     pipeline_block_fraud = pipeline_block_legit = 0
     pipeline_escalate_fraud = pipeline_escalate_legit = 0
     pipeline_allow_fraud = pipeline_allow_legit = 0
 
-    for row in test_transactions.itertuples(index=False):
+    for i, row in enumerate(test_transactions.itertuples(index=False), start=1):
+        if i % PROGRESS_EVERY == 0:
+            elapsed = time.time() - start
+            rate = i / elapsed
+            remaining = (len(test_transactions) - i) / rate
+            print(f"  {i:,}/{len(test_transactions):,} ({elapsed:.0f}s elapsed, "
+                  f"~{remaining:.0f}s remaining)", flush=True)
+
         txn = {
             "amount": row.amount,
             "transaction_type": row.transaction_type,

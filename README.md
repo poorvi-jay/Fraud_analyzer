@@ -8,38 +8,61 @@ coordinator agent reconciles their opinions into a final verdict (`allow` /
 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the full product and
 system design.
 
-**Portfolio project, not a commercial product.** Synthetic data only — no
-real payment processing, no real financial data. See PRD §4 for the full
-non-goals list.
+**Portfolio project, not a commercial product.** No real payment processing,
+no real user financial data ever flows through the live demo. The anomaly
+model can be trained on the real, publicly-available Kaggle PaySim dataset
+(itself synthetic financial simulation data, not real transactions) for a
+more rigorous evaluation — see [Result](#result-does-the-multi-agent-pipeline-actually-help)
+below — but the live public deployment's case queue is seeded from
+synthetic demo transactions regardless of which dataset the model was
+trained on. See PRD §4 for the full non-goals list.
 
-**Status: Phase 1 (MVP) complete.** Trained anomaly model, real (mockable)
-context agent, policy agent, coordinator, FastAPI backend, and a minimal
-case queue / case detail frontend all run end-to-end locally. Phase 2
-(reviewer auth, human override, analytics dashboard) and real deployment
-are not built yet — see [What's not done yet](#whats-not-done-yet).
+**Status: Phase 1 (MVP) complete and deployed.** Trained anomaly model, real
+(mockable) context agent, policy agent, coordinator, FastAPI backend, and a
+minimal case queue / case detail frontend all run end-to-end, both locally
+and live:
+
+- Frontend: https://fraud-analyzer-five.vercel.app
+- Backend API: https://fraudlens-api-2zmg.onrender.com (interactive docs at `/docs`)
+- Database: Supabase Postgres
+
+Phase 2 (reviewer auth, human override, analytics dashboard) is not built
+yet — see [What's not done yet](#whats-not-done-yet).
 
 ## Result: does the multi-agent pipeline actually help?
 
 Measured on a held-out test split the anomaly model never trained on
 (see [`ml/reports/baseline_comparison.md`](ml/reports/baseline_comparison.md)
-for the full writeup, regenerate with `python ml/evaluate_baseline.py`):
+for the full writeup, regenerate with `python ml/evaluate_baseline.py`),
+using the **real Kaggle PaySim dataset** (6.36M transactions):
 
 | | Anomaly model alone | Multi-agent pipeline |
 |---|---|---|
-| False negative rate (fraud that slips through untouched) | 9.09% | **3.03%** |
-| False positive rate | 1.52% (flagged) | 0.14% (wrongly auto-blocked) |
-| Escalated to a human | — | 2.31% of all cases |
+| False negative rate (fraud that slips through untouched) | 2.56% | 2.56% |
+| Strict false positive rate | 0.60% (flagged) | **0.43%** (wrongly auto-blocked) |
+| Escalated to a human | — | 0.71% of all cases |
+
+The honest finding here: on real PaySim, the anomaly model *alone* already
+scores ROC-AUC 0.9993 on the full 1.58M-row test set — it catches nearly
+all fraud on its own, because real PaySim's fraud is always the exact same
+statistical signature (a TRANSFER that fully drains the origin balance).
+There's no "subtle, blends into normal behavior" fraud subtype in the real
+ground truth. So the multi-agent pipeline doesn't move the false-negative
+needle much here — what it *does* do is cut the **wrongful-block rate**
+(0.60% → 0.43%) by routing ambiguous cases to a human instead of the
+anomaly model's blunter binary flag. (An earlier run against a synthetic
+stand-in dataset, deliberately engineered with a stealthy fraud subtype the
+anomaly model can't see, showed a much larger false-negative improvement —
+9.09% → 3.03% — which is the scenario the coordinator's design was built
+around; see git history. Real PaySim turned out to be an easier case for
+the anomaly model alone than that synthetic scenario assumed.)
 
 The anomaly model only sees transaction-intrinsic statistics (amount,
 balance movement, type) — deliberately no per-user profile (see
-`backend/app/feature_engineering.py`). It reliably catches large,
-balance-draining "obvious" fraud, but misses fraud that's modest in size and
-blends into normal balance movement, and over-flags large-but-legitimate
-purchases (e.g. a frequent traveller's big purchase abroad) — it has no way
-to know what's normal *for that specific user*. The context agent does. The
-coordinator escalates exactly the cases where the two disagree, instead of
-guessing or escalating everything — which is why the false-negative rate
-drops by two-thirds while only 2.3% of cases go to a human.
+`backend/app/feature_engineering.py`). The context agent is what would catch
+a fraud that's modest in size and blends into normal balance movement, or
+avoid over-flagging a large-but-legitimate purchase — real PaySim's fraud
+pattern just doesn't happen to need that this time.
 
 ## How the coordinator decides
 
@@ -71,15 +94,24 @@ pip install -r requirements.txt
 ### 1. Data + model (already generated and committed, but here's how)
 
 ```bash
-python ml/prepare_paysim.py       # writes data/transactions.csv, data/user_profiles.csv
+python ml/prepare_paysim.py       # writes data/transactions.csv, data/user_profiles.csv,
+                                   # and ml/models/policy_calibration.json
+python ml/diagnose_thresholds.py  # sanity-check policy_agent's thresholds against
+                                   # whatever's currently in data/transactions.csv
 python ml/train_anomaly_model.py  # trains + writes ml/models/
 python ml/evaluate_baseline.py    # writes ml/reports/baseline_comparison.{md,json}
+                                   # (samples 30k rows by default; --sample-size 0 for the full set)
 ```
 
 If you have the real Kaggle PaySim CSV, drop it at `data/paysim.csv` before
 running `prepare_paysim.py` and it's adapted automatically instead of
 generating synthetic data (synthetic per-user profiles are still generated,
-since PaySim itself has no user history — see [Limitations](#limitations)).
+since PaySim itself has no meaningful user history — see
+[Limitations](#limitations)). `policy_agent`'s "large reporting threshold"
+rule is recalibrated to whatever dataset's actual amount distribution is
+in use each time you run `prepare_paysim.py` — a fixed dollar figure
+doesn't transfer between the synthetic data (median transaction ~$240) and
+real PaySim (median ~$75,000).
 
 ### 2. Backend
 
@@ -124,18 +156,32 @@ See [`.env.example`](.env.example) for all backend settings. Notably:
 
 ## Limitations
 
-- **PaySim has no real per-user history.** `ml/prepare_paysim.py` generates
-  synthetic user profiles (typical amount, home country, travel frequency)
-  to give the context agent something to compare against. This is a
-  documented limitation, not a hidden one — it's not claimed to generalize
-  to real-world fraud patterns.
+- **Real PaySim has (almost) no per-user history.** `ml/prepare_paysim.py`
+  generates synthetic user profiles (home country, travel frequency) to
+  give the context agent something to compare against, but this turned out
+  to matter more than expected: ~99.9% of real PaySim's `nameOrig` values
+  appear in exactly one transaction — it's a one-shot population simulation,
+  not repeat customers. `typical_transaction_amount` falls back to a
+  population median by transaction type for anyone with fewer than 3
+  observed transactions (see `adapt_real_paysim` in `prepare_paysim.py`),
+  since a "median" of one transaction is just that transaction's own
+  amount. This is a documented, discovered limitation, not a hidden one —
+  the context agent's per-user personalization is real for the small
+  fraction of users who do have multiple transactions, and a
+  population-level norm for everyone else.
 - **The context agent defaults to a mock heuristic**, not a live LLM call —
   no API key is configured in this environment. The heuristic is designed
   to be a reasonable stand-in (see `_run_mock` in `context_agent.py`) and
   the Anthropic-backed path is implemented and ready, just untested against
   a live key.
 - **Policy rules are illustrative**, not derived from actual regulatory
-  requirements (see PRD non-goals).
+  requirements (see PRD non-goals). Thresholds are calibrated to whichever
+  dataset is currently loaded (see above), not to real-world regulatory
+  dollar figures.
+- **Real PaySim's fraud pattern is uniformly obvious** (always a full
+  balance drain via TRANSFER), which means the anomaly model alone already
+  performs very well against it — see the Result section above for what
+  that does and doesn't say about the multi-agent design.
 
 ## What's not done yet (Phase 2 / stretch, per the PRD)
 
@@ -143,16 +189,18 @@ See [`.env.example`](.env.example) for all backend settings. Notably:
   `human_reviews` table exists in the schema and is designed for this, but
   nothing writes to it yet.
 - Analytics dashboard (verdict distribution, agent agreement rate charts).
-- Real deployment (Vercel / Render / a real Supabase project) — everything
-  above runs locally only; `supabase/schema.sql` is ready to apply whenever
-  a real project exists.
+- Real LLM context agent in production — currently `LLM_PROVIDER=mock` on
+  the live deployment (no API key configured yet); the Anthropic-backed
+  path is implemented, just switching it on is pending a cost/quality
+  decision (see PRD open questions).
 - PDF export, compliance webhook stub (stretch, cut first per the PRD).
 
 ## Repo layout
 
 ```
 backend/    FastAPI app, agents, persistence (SQLAlchemy), tests
-ml/         data generation, model training, baseline evaluation, demo seeding
+ml/         data generation, threshold calibration/diagnostics, model training,
+            baseline evaluation, demo seeding
 frontend/   React + Vite case queue / case detail UI
 supabase/   Postgres schema for a real Supabase project
 docs/       PRD.md, ARCHITECTURE.md
