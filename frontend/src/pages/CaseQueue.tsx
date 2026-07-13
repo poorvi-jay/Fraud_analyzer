@@ -1,7 +1,8 @@
+import type { TransactionListItem, Verdict } from "../types";
 import { useEffect, useState } from "react";
+
 import { Link } from "react-router-dom";
 import { listTransactions } from "../api";
-import type { TransactionListItem, Verdict } from "../types";
 
 const VERDICT_OPTIONS: (Verdict | "")[] = ["", "allow", "escalate", "block"];
 
@@ -50,7 +51,7 @@ export default function CaseQueue() {
           <thead>
             <tr>
               <th>Verdict</th>
-              <th>Amount</th>
+               <th className="amt">Amount</th>
               <th>Type</th>
               <th>Location</th>
               <th>Occurred at</th>
@@ -65,7 +66,7 @@ export default function CaseQueue() {
                     <span className={`badge badge-${t.final_verdict}`}>{t.final_verdict ?? "pending"}</span>
                   </Link>
                 </td>
-                <td>${t.amount.toFixed(2)}</td>
+                <td className="amt">${t.amount.toFixed(2)}</td>
                 <td>{t.transaction_type}</td>
                 <td>{t.location_country}</td>
                 <td>{new Date(t.occurred_at).toLocaleString()}</td>
