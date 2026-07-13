@@ -1,0 +1,28 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+
+# Node
+node_modules/
+dist/
+.vite/
+
+# Env
+.env
+.env.local
+
+# The real Kaggle PaySim CSV (if you drop one in) is never committed --
+# licensing/size. The synthetic stand-in data/*.csv IS committed (~2MB, see
+# ml/prepare_paysim.py), along with ml/models/ and ml/reports/, so the repo
+# is a clickable demo without a training step first.
+data/paysim.csv
+*.db
+*.sqlite3
+
+# OS / editor
+.DS_Store
+*.swp
