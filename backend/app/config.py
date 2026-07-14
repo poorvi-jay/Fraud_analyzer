@@ -23,5 +23,11 @@ class Settings(BaseSettings):
     review_rate_limit: str = "20/minute"
     frontend_origin: str = "http://localhost:5173"
 
+    # Phase 2: reviewer auth. Backend verifies tokens against Supabase's Auth
+    # API (auth.get_user), not a local JWT decode, so only these two are
+    # needed -- no shared JWT secret to keep in sync with signing-key rotation.
+    supabase_url: str = ""
+    supabase_anon_key: str = ""
+
 
 settings = Settings()
