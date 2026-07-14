@@ -1,4 +1,5 @@
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict
 
@@ -25,11 +26,28 @@ class AgentOpinionOut(BaseModel):
     reasoning: str
 
 
+class OverrideRequest(BaseModel):
+    decision: Literal["approve", "reject"]
+    note: str
+
+
+class HumanReviewOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    decision: str
+    note: str
+    reviewer_id: str
+    reviewed_at: datetime
+
+
 class ReviewResultOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
+    id: str
     final_verdict: str
     coordinator_reasoning: str
+    human_reviews: list[HumanReviewOut] = []
 
 
 class TransactionListItem(BaseModel):

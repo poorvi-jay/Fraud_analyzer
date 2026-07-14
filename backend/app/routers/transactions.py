@@ -58,7 +58,10 @@ def get_transaction(transaction_id: str, db: Session = Depends(get_db)):
     txn = db.get(
         Transaction,
         transaction_id,
-        options=[joinedload(Transaction.opinions), joinedload(Transaction.review_result)],
+        options=[
+            joinedload(Transaction.opinions),
+            joinedload(Transaction.review_result).joinedload(ReviewResult.human_reviews),
+        ],
     )
     if txn is None:
         raise HTTPException(status_code=404, detail=f"No transaction with id={transaction_id!r}")

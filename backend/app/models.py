@@ -74,16 +74,15 @@ class ReviewResult(Base):
 
 
 class HumanReview(Base):
-    """Phase 2 (override flow). Table created now so the schema is stable
-    and demonstrable end-to-end later; nothing writes to it yet in the MVP.
-    """
+    """Phase 2 override flow: a reviewer's decision on an escalated case."""
 
     __tablename__ = "human_reviews"
 
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
     review_result_id: Mapped[str] = mapped_column(ForeignKey("review_results.id"))
     reviewer_id: Mapped[str] = mapped_column(String)
-    decision: Mapped[str] = mapped_column(String)
+    decision: Mapped[str] = mapped_column(String)  # approve | reject
     note: Mapped[str] = mapped_column(String)
+    reviewed_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
     review_result: Mapped["ReviewResult"] = relationship(back_populates="human_reviews")
