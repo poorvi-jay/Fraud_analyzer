@@ -16,6 +16,12 @@
 
   --serif: "Source Serif 4", Georgia, "Times New Roman", serif;
   --mono: "Courier Prime", "Courier New", ui-monospace, monospace;
+
+  /* Chart fills only -- badges/text stay strictly black-or-red per the
+     ledger convention above. Escalate gets a lighter red tint so a
+     three-verdict bar chart still reads as a hierarchy (routine -> flagged
+     for review -> blocked), not just two colors repeated. */
+  --red-light: #c17a72;
 }
 
 * {
@@ -43,6 +49,45 @@ header {
   padding: 32px 0 20px;
   border-bottom: 3px double var(--rule-strong);
   margin-bottom: 24px;
+}
+
+.header-top {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.header-meta {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
+  font-family: var(--mono);
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--ink-muted);
+}
+
+.nav-links {
+  display: flex;
+  gap: 18px;
+}
+
+.nav-links a {
+  color: var(--ink-muted);
+}
+
+.nav-links a:hover {
+  color: var(--ink);
+}
+
+.header-auth {
+  font-family: var(--mono);
+  font-size: 12px;
+  text-transform: none;
+  letter-spacing: normal;
 }
 
 h1 {
@@ -211,6 +256,11 @@ a:hover {
   color: var(--red);
 }
 
+.subtle {
+  font-size: 13px;
+  color: var(--ink-muted);
+}
+
 select {
   font: inherit;
   font-family: var(--mono);
@@ -225,4 +275,128 @@ code {
   background: var(--paper-alt);
   padding: 1px 5px;
   border: 1px solid var(--border);
+}
+
+input,
+textarea {
+  font: inherit;
+  font-family: var(--mono);
+  padding: 6px 8px;
+  background: var(--paper);
+  border: 1px solid var(--border);
+  color: var(--ink);
+  width: 100%;
+}
+
+button {
+  font: inherit;
+  font-family: var(--mono);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-size: 12px;
+  padding: 8px 16px;
+  background: var(--ink);
+  color: var(--paper);
+  border: 1px solid var(--ink);
+  cursor: pointer;
+}
+
+button:hover {
+  background: var(--paper);
+  color: var(--ink);
+}
+
+button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.link-button {
+  all: unset;
+  cursor: pointer;
+  text-decoration: underline;
+}
+
+.login-page form,
+.override-form {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  max-width: 420px;
+  margin-top: 16px;
+}
+
+.login-page label,
+.override-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--ink-muted);
+}
+
+.override-form select {
+  width: 100%;
+}
+
+.human-reviews {
+  margin-top: 16px;
+}
+
+.human-review-entry {
+  border-top: 1px solid var(--rule);
+  padding: 10px 0;
+  font-size: 13.5px;
+}
+
+.human-review-entry .meta {
+  font-size: 11px;
+  color: var(--ink-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-bottom: 4px;
+}
+
+.human-review-entry .decision-reject {
+  color: var(--red);
+  font-weight: 700;
+}
+
+/* Analytics dashboard */
+.stat-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 12px;
+  margin-bottom: 24px;
+}
+
+.stat-card {
+  border: 1px solid var(--border);
+  background: var(--paper);
+  padding: 14px 16px;
+}
+
+.stat-card .label {
+  font-size: 11px;
+  color: var(--ink-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-bottom: 6px;
+}
+
+.stat-card .value {
+  font-family: var(--serif);
+  font-size: 24px;
+  font-weight: 600;
+}
+
+.stat-card .value.flagged {
+  color: var(--red);
+}
+
+.chart-card {
+  border: 1px solid var(--border);
+  background: var(--paper);
+  padding: 16px 16px 8px;
+  margin-bottom: 24px;
 }
