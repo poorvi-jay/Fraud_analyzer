@@ -50,8 +50,9 @@ create table if not exists review_results (
     coordinator_reasoning text not null
 );
 
--- Phase 2 (human override). Table created now so the schema is stable and
--- demonstrable end-to-end later; nothing writes to it yet in the MVP.
+-- Phase 2 (human override). Table created in Phase 1 so the schema was
+-- stable and demonstrable end-to-end; POST /reviews/{id}/override now
+-- writes to it.
 create table if not exists human_reviews (
     id text primary key default gen_random_uuid()::text,
     review_result_id text not null references review_results(id),
@@ -60,6 +61,21 @@ create table if not exists human_reviews (
     note text not null
 );
 create index if not exists idx_human_reviews_review_result_id on human_reviews(review_result_id);
+
+-- Migration for the table above, which was already deployed before Phase 2
+-- added reviewer_id-backed auth and a reviewed_at timestamp -- `add column
+-- if not exists` and a guarded constraint keep this script re-runnable on
+-- both a fresh project and the existing live one.
+alter table human_reviews add column if not exists reviewed_at timestamptz not null default now();
+do $$
+begin
+    if not exists (
+        select 1 from pg_constraint where conname = 'human_reviews_decision_check'
+    ) then
+        alter table human_reviews add constraint human_reviews_decision_check
+            check (decision in ('approve', 'reject'));
+    end if;
+end $$;
 
 -- Row Level Security: queue/detail/analytics stay publicly readable
 -- (demo purpose, matches the unauthenticated GET endpoints in
@@ -71,9 +87,15 @@ alter table agent_opinions enable row level security;
 alter table review_results enable row level security;
 alter table human_reviews enable row level security;
 
+-- drop-then-create (rather than a bare `create policy`) keeps this
+-- re-runnable: Postgres has no `create policy if not exists`.
+drop policy if exists "public read user_profiles" on user_profiles;
 create policy "public read user_profiles" on user_profiles for select using (true);
+drop policy if exists "public read transactions" on transactions;
 create policy "public read transactions" on transactions for select using (true);
+drop policy if exists "public read agent_opinions" on agent_opinions;
 create policy "public read agent_opinions" on agent_opinions for select using (true);
+drop policy if exists "public read review_results" on review_results;
 create policy "public read review_results" on review_results for select using (true);
 -- human_reviews intentionally has no public read policy: override notes are
 -- only exposed via the backend API (Phase 2), not directly queryable.
