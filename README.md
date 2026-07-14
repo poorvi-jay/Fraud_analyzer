@@ -17,17 +17,18 @@ below — but the live public deployment's case queue is seeded from
 synthetic demo transactions regardless of which dataset the model was
 trained on. See PRD §4 for the full non-goals list.
 
-**Status: Phase 1 (MVP) complete and deployed.** Trained anomaly model, real
-(mockable) context agent, policy agent, coordinator, FastAPI backend, and a
-minimal case queue / case detail frontend all run end-to-end, both locally
-and live:
+**Status: Phase 1 (MVP) deployed; Phase 2 (reviewer auth, human override,
+analytics dashboard) built and merged, deployment pending.** Trained anomaly
+model, real (mockable) context agent, policy agent, coordinator, FastAPI
+backend, and a case queue / case detail / analytics frontend all run
+end-to-end locally:
 
-- Frontend: https://fraud-analyzer-five.vercel.app
+- Frontend: https://fraud-analyzer-five.vercel.app (Phase 1 build; Phase 2 redeploy pending)
 - Backend API: https://fraudlens-api-2zmg.onrender.com (interactive docs at `/docs`)
 - Database: Supabase Postgres
 
-Phase 2 (reviewer auth, human override, analytics dashboard) is not built
-yet — see [What's not done yet](#whats-not-done-yet).
+Phase 2 needs one-time setup on the live Supabase project before it's live
+end-to-end — see [Phase 2 setup](#phase-2-reviewer-override--analytics).
 
 ## Result: does the multi-agent pipeline actually help?
 
@@ -118,9 +119,14 @@ real PaySim (median ~$75,000).
 ```bash
 cd backend
 cp ../.env.example .env   # defaults work as-is: sqlite + mock LLM, no keys needed
-pytest                    # 21 tests
+pytest
 uvicorn app.main:app --reload
 ```
+
+Reviewer sign-in and the override endpoint additionally need
+`SUPABASE_URL`/`SUPABASE_ANON_KEY` in `.env` (see
+[Phase 2 setup](#phase-2-reviewer-override--analytics)) — everything else
+(case queue, case detail, analytics) works without them.
 
 Populate the case queue with some demo transactions (writes directly to the
 DB, bypassing the public rate limit):
@@ -154,6 +160,39 @@ See [`.env.example`](.env.example) for all backend settings. Notably:
 - `REVIEW_RATE_LIMIT` — rate-limits the public `POST /transactions/review`
   endpoint to control LLM API cost once a real provider is wired up.
 
+## Phase 2: reviewer override & analytics
+
+Per PRD §7.2: a reviewer can sign in and override an escalated case with a
+note, and an analytics view surfaces verdict distribution, agent agreement
+rate, and verdict volume over time. The case queue, case detail, and
+analytics dashboard all stay publicly viewable without signing in — only
+`POST /reviews/{id}/override` requires a reviewer session.
+
+**How auth works**: the frontend signs a reviewer in directly against
+Supabase Auth (`frontend/src/auth.tsx`) and sends the resulting access token
+as a bearer header on override requests. The backend verifies it by calling
+Supabase's Auth API (`auth.get_user`, see `backend/app/auth.py`) rather than
+decoding the JWT locally — no shared secret to keep in sync, and it works
+regardless of which signing algorithm the Supabase project uses.
+
+**One-time setup** (not automated — needs your own Supabase/Render/Vercel
+dashboard access):
+
+1. Run the `alter table` migration block in [`supabase/schema.sql`](supabase/schema.sql)
+   against your Supabase project (adds `human_reviews.reviewed_at` and a
+   decision check constraint to the table that already existed from Phase 1).
+2. Create one reviewer account by hand under Supabase Auth → Users
+   (email/password — this is a single-demo-account setup, not self-serve
+   signup, per PRD's "not multi-tenant" non-goal).
+3. Set `SUPABASE_URL` / `SUPABASE_ANON_KEY` in the backend env (Render) and
+   `VITE_SUPABASE_URL` / `VITE_SUPABASE_ANON_KEY` in the frontend env
+   (Vercel) — same project, same anon key on both sides.
+4. Redeploy both.
+
+**Locally**: same two env vars in `backend/.env` and `frontend/.env` (see
+`.env.example` in each), pointed at the same Supabase project (or a free
+Supabase project of your own — no need to share the live one).
+
 ## Limitations
 
 - **Real PaySim has (almost) no per-user history.** `ml/prepare_paysim.py`
@@ -183,12 +222,12 @@ See [`.env.example`](.env.example) for all backend settings. Notably:
   performs very well against it — see the Result section above for what
   that does and doesn't say about the multi-agent design.
 
-## What's not done yet (Phase 2 / stretch, per the PRD)
+## What's not done yet (stretch, per the PRD)
 
-- Reviewer auth (Supabase Auth) and the human override endpoint —
-  `human_reviews` table exists in the schema and is designed for this, but
-  nothing writes to it yet.
-- Analytics dashboard (verdict distribution, agent agreement rate charts).
+- Phase 2 (reviewer auth, human override, analytics dashboard) is built —
+  see [Phase 2 setup](#phase-2-reviewer-override--analytics) for the
+  one-time Supabase/Render/Vercel steps needed to make it live on the
+  public deployment.
 - Real LLM context agent in production — currently `LLM_PROVIDER=mock` on
   the live deployment (no API key configured yet); the Anthropic-backed
   path is implemented, just switching it on is pending a cost/quality
@@ -201,7 +240,7 @@ See [`.env.example`](.env.example) for all backend settings. Notably:
 backend/    FastAPI app, agents, persistence (SQLAlchemy), tests
 ml/         data generation, threshold calibration/diagnostics, model training,
             baseline evaluation, demo seeding
-frontend/   React + Vite case queue / case detail UI
+frontend/   React + Vite case queue / case detail / analytics / reviewer sign-in UI
 supabase/   Postgres schema for a real Supabase project
 docs/       PRD.md, ARCHITECTURE.md
 ```
