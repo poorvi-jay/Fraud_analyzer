@@ -27,9 +27,14 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return resp.json();
 }
 
-export function listTransactions(verdict?: Verdict | ""): Promise<TransactionListItem[]> {
-  const query = verdict ? `?verdict=${verdict}` : "";
-  return request(`/transactions${query}`);
+export function listTransactions(
+  verdict?: Verdict | "",
+  limit = 50,
+  offset = 0
+): Promise<TransactionListItem[]> {
+  const params = new URLSearchParams({ limit: String(limit), offset: String(offset) });
+  if (verdict) params.set("verdict", verdict);
+  return request(`/transactions?${params}`);
 }
 
 export function getTransaction(id: string): Promise<TransactionDetail> {

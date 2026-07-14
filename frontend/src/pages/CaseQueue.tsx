@@ -5,21 +5,38 @@ import { Link } from "react-router-dom";
 import { listTransactions } from "../api";
 
 const VERDICT_OPTIONS: (Verdict | "")[] = ["", "allow", "escalate", "block"];
+const PAGE_SIZE = 50;
 
 export default function CaseQueue() {
   const [transactions, setTransactions] = useState<TransactionListItem[]>([]);
   const [verdict, setVerdict] = useState<Verdict | "">("");
   const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [hasMore, setHasMore] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     setLoading(true);
     setError(null);
-    listTransactions(verdict)
-      .then(setTransactions)
+    listTransactions(verdict, PAGE_SIZE, 0)
+      .then((rows) => {
+        setTransactions(rows);
+        setHasMore(rows.length === PAGE_SIZE);
+      })
       .catch((e) => setError(e.message))
       .finally(() => setLoading(false));
   }, [verdict]);
+
+  function loadMore() {
+    setLoadingMore(true);
+    listTransactions(verdict, PAGE_SIZE, transactions.length)
+      .then((rows) => {
+        setTransactions((prev) => [...prev, ...rows]);
+        setHasMore(rows.length === PAGE_SIZE);
+      })
+      .catch((e) => setError(e.message))
+      .finally(() => setLoadingMore(false));
+  }
 
   return (
     <div>
@@ -39,7 +56,10 @@ export default function CaseQueue() {
 
       {loading && <p>Loading...</p>}
       {error && <p className="error">Failed to load transactions: {error}</p>}
-      {!loading && !error && transactions.length === 0 && (
+      {!loading && !error && transactions.length === 0 && verdict && (
+        <p>No {verdict} transactions in the queue.</p>
+      )}
+      {!loading && !error && transactions.length === 0 && !verdict && (
         <p>
           No transactions yet. Run <code>python ml/seed_demo_queue.py</code> against this backend to populate the
           queue.
@@ -51,7 +71,7 @@ export default function CaseQueue() {
           <thead>
             <tr>
               <th>Verdict</th>
-               <th className="amt">Amount</th>
+              <th className="amt">Amount</th>
               <th>Type</th>
               <th>Location</th>
               <th>Occurred at</th>
@@ -75,6 +95,14 @@ export default function CaseQueue() {
             ))}
           </tbody>
         </table>
+      )}
+
+      {hasMore && (
+        <p className="toolbar">
+          <button type="button" onClick={loadMore} disabled={loadingMore}>
+            {loadingMore ? "Loading..." : `Load more (showing ${transactions.length})`}
+          </button>
+        </p>
       )}
     </div>
   );
