@@ -53,33 +53,46 @@ def run_pipeline(db: Session, payload: TransactionReviewRequest) -> Transaction:
     db.add(txn)
     db.flush()  # assigns txn.id
 
-    profile_dict = _profile_to_dict(profile)
-    txn_dict = _transaction_to_dict(txn)
-    account_age_days = max((txn.occurred_at.date() - profile.account_created).days, 0)
+    # Everything from here to commit() is wrapped so a mid-pipeline failure
+    # (an agent throwing) rolls back the flushed Transaction row instead of
+    # leaving it pending on the session. A single get_db()-scoped request
+    # would have this cleaned up by the session close anyway, but any caller
+    # that reuses one session across many calls (e.g. ml/seed_demo_queue.py)
+    # would otherwise have that orphaned row silently swept into whatever
+    # unrelated commit() happens next -- a transaction with no opinions and
+    # no review result ever attached.
+    try:
+        profile_dict = _profile_to_dict(profile)
+        txn_dict = _transaction_to_dict(txn)
+        account_age_days = max((txn.occurred_at.date() - profile.account_created).days, 0)
 
-    policy_opinion = policy_agent.run(txn_dict, profile_dict, account_age_days)
-    anomaly_opinion = anomaly_agent.run(txn_dict)
-    context_opinion = context_agent.run(txn_dict, profile_dict)
-    verdict = coordinator_agent.run(anomaly_opinion, context_opinion, policy_opinion)
+        policy_opinion = policy_agent.run(txn_dict, profile_dict, account_age_days)
+        anomaly_opinion = anomaly_agent.run(txn_dict)
+        context_opinion = context_agent.run(txn_dict, profile_dict)
+        verdict = coordinator_agent.run(anomaly_opinion, context_opinion, policy_opinion)
 
-    for opinion in (anomaly_opinion, context_opinion, policy_opinion):
+        for opinion in (anomaly_opinion, context_opinion, policy_opinion):
+            db.add(
+                AgentOpinionRow(
+                    transaction_id=txn.id,
+                    agent_name=opinion.agent_name,
+                    score=opinion.score,
+                    flag=opinion.flag,
+                    reasoning=opinion.reasoning,
+                )
+            )
         db.add(
-            AgentOpinionRow(
+            ReviewResult(
                 transaction_id=txn.id,
-                agent_name=opinion.agent_name,
-                score=opinion.score,
-                flag=opinion.flag,
-                reasoning=opinion.reasoning,
+                final_verdict=verdict.final_verdict,
+                coordinator_reasoning=verdict.coordinator_reasoning,
             )
         )
-    db.add(
-        ReviewResult(
-            transaction_id=txn.id,
-            final_verdict=verdict.final_verdict,
-            coordinator_reasoning=verdict.coordinator_reasoning,
-        )
-    )
 
-    db.commit()
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+
     db.refresh(txn)
     return txn
