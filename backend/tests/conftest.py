@@ -24,10 +24,14 @@ def client():
 
 @pytest.fixture(scope="session", autouse=True)
 def _test_database():
-    from app.db import init_db
+    from app.db import engine, init_db
 
     init_db()
     yield
+    # Windows keeps the sqlite file locked until every pooled connection is
+    # closed -- unlinking before disposing the engine intermittently raised
+    # PermissionError there, even though all tests had already finished.
+    engine.dispose()
     if TEST_DB_PATH.exists():
         TEST_DB_PATH.unlink()
 
