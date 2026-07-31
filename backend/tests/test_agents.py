@@ -42,7 +42,12 @@ class TestPolicyAgent:
         assert opinion.flag is True
         assert "mule pattern" in opinion.reasoning
 
-    def test_flags_large_reporting_threshold(self):
+    def test_flags_large_reporting_threshold(self, monkeypatch):
+        # LARGE_REPORTING_THRESHOLD is calibrated from whichever dataset is
+        # currently in data/transactions.csv (see ml/prepare_paysim.py), so a
+        # fixed test amount can't assume a fixed threshold -- pin it here to
+        # keep this test independent of whatever dataset happens to be checked in.
+        monkeypatch.setattr(policy_agent, "LARGE_REPORTING_THRESHOLD", 10_000.0)
         txn = _txn(amount=15000.0, origin_balance_before=20000.0, origin_balance_after=5000.0)
         opinion = policy_agent.run(txn, PROFILE, account_age_days=1000)
         assert opinion.flag is True
