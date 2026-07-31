@@ -60,7 +60,12 @@ def main():
                 user_id=user_id,
                 account_created=pd.to_datetime(row.account_created).date(),
                 home_country=row.home_country,
-                typical_transaction_amount=row.typical_transaction_amount,
+                # float(): pandas columns are numpy float64, which psycopg2 has
+                # no adapter for -- SQLite silently tolerated it, but against
+                # real Postgres it gets embedded unquoted as literal text
+                # ("np.float64(9482.19)"), which Postgres then tries to parse
+                # as a schema-qualified function call and rejects.
+                typical_transaction_amount=float(row.typical_transaction_amount),
                 travel_frequency=row.travel_frequency,
             )
         )
@@ -70,10 +75,10 @@ def main():
     def seed_transaction(row, when) -> str:
         payload = TransactionReviewRequest(
             user_id=row.user_id,
-            amount=row.amount,
+            amount=float(row.amount),
             transaction_type=row.transaction_type,
-            origin_balance_before=row.origin_balance_before,
-            origin_balance_after=row.origin_balance_after,
+            origin_balance_before=float(row.origin_balance_before),
+            origin_balance_after=float(row.origin_balance_after),
             location_country=row.location_country,
             # Ground truth intentionally omitted -- live demo traffic has none.
             occurred_at=when,
