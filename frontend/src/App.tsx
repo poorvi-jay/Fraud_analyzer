@@ -4,6 +4,7 @@ import { AuthProvider, useAuth } from "./auth";
 import Analytics from "./pages/Analytics";
 import CaseDetail from "./pages/CaseDetail";
 import CaseQueue from "./pages/CaseQueue";
+import Home from "./pages/Home";
 import Login from "./pages/Login";
 
 function HeaderAuth() {
@@ -33,7 +34,8 @@ function AppShell() {
           </div>
           <div className="header-meta">
             <nav className="nav-links">
-              <Link to="/">Case queue</Link>
+              <Link to="/">Home</Link>
+              <Link to="/queue">Case queue</Link>
               <Link to="/analytics">Analytics</Link>
             </nav>
             <HeaderAuth />
@@ -41,7 +43,8 @@ function AppShell() {
         </header>
         <main>
           <Routes>
-            <Route path="/" element={<CaseQueue />} />
+            <Route path="/" element={<Home />} />
+            <Route path="/queue" element={<CaseQueue />} />
             <Route path="/cases/:id" element={<CaseDetail />} />
             <Route path="/analytics" element={<Analytics />} />
             <Route path="/login" element={<Login />} />

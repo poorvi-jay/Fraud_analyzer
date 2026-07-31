@@ -81,7 +81,7 @@ export default function CaseDetail() {
   return (
     <div>
       <p>
-        <Link to="/">&larr; back to queue</Link>
+        <Link to="/queue">&larr; back to queue</Link>
       </p>
       <h2>
         Case {txn.id.slice(0, 8)}

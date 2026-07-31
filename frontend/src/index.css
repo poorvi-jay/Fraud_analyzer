@@ -400,3 +400,44 @@ button:disabled {
   padding: 16px 16px 8px;
   margin-bottom: 24px;
 }
+
+/* Home page */
+.home section {
+  margin-bottom: 32px;
+}
+
+.hero p {
+  font-size: 15px;
+  max-width: 640px;
+}
+
+.home-actions {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 12px;
+}
+
+.home-action {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  border: 1px solid var(--border);
+  background: var(--paper);
+  padding: 14px 16px;
+  text-decoration: none;
+}
+
+.home-action:hover {
+  border-color: var(--ink);
+  text-decoration: none;
+}
+
+.home-action strong {
+  font-family: var(--serif);
+  font-size: 15px;
+}
+
+.home-action span {
+  font-size: 13px;
+  color: var(--ink-muted);
+}

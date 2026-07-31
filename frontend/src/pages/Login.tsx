@@ -17,7 +17,7 @@ export default function Login() {
     setSubmitting(true);
     try {
       await signIn(email, password);
-      navigate("/");
+      navigate("/queue");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Sign in failed.");
     } finally {
