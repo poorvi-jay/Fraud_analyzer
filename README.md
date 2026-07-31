@@ -17,18 +17,18 @@ below — but the live public deployment's case queue is seeded from
 synthetic demo transactions regardless of which dataset the model was
 trained on. See PRD §4 for the full non-goals list.
 
-**Status: Phase 1 (MVP) deployed; Phase 2 (reviewer auth, human override,
-analytics dashboard) built and merged, deployment pending.** Trained anomaly
-model, real (mockable) context agent, policy agent, coordinator, FastAPI
-backend, and a case queue / case detail / analytics frontend all run
-end-to-end locally:
+**Status: Phase 1 (MVP) and Phase 2 (reviewer auth, human override, analytics
+dashboard) both deployed and live.** Trained anomaly model, real (mockable)
+context agent, policy agent, coordinator, FastAPI backend, and a case queue /
+case detail / analytics / reviewer sign-in frontend all run end-to-end, both
+locally and live:
 
-- Frontend: https://fraud-analyzer-five.vercel.app (Phase 1 build; Phase 2 redeploy pending)
+- Frontend: https://fraud-analyzer-five.vercel.app
 - Backend API: https://fraudlens-api-2zmg.onrender.com (interactive docs at `/docs`)
 - Database: Supabase Postgres
 
-Phase 2 needs one-time setup on the live Supabase project before it's live
-end-to-end — see [Phase 2 setup](#phase-2-reviewer-override--analytics).
+See [Phase 2 setup](#phase-2-reviewer-override--analytics) for how reviewer
+auth is wired up if you're standing up your own deployment.
 
 ## Result: does the multi-agent pipeline actually help?
 
@@ -175,8 +175,9 @@ Supabase's Auth API (`auth.get_user`, see `backend/app/auth.py`) rather than
 decoding the JWT locally — no shared secret to keep in sync, and it works
 regardless of which signing algorithm the Supabase project uses.
 
-**One-time setup** (not automated — needs your own Supabase/Render/Vercel
-dashboard access):
+**One-time setup** (already done on the live deployment above; needed again
+only if you're standing up your own — not automated, needs your own
+Supabase/Render/Vercel dashboard access):
 
 1. Run the `alter table` migration block in [`supabase/schema.sql`](supabase/schema.sql)
    against your Supabase project (adds `human_reviews.reviewed_at` and a
@@ -224,10 +225,6 @@ Supabase project of your own — no need to share the live one).
 
 ## What's not done yet (stretch, per the PRD)
 
-- Phase 2 (reviewer auth, human override, analytics dashboard) is built —
-  see [Phase 2 setup](#phase-2-reviewer-override--analytics) for the
-  one-time Supabase/Render/Vercel steps needed to make it live on the
-  public deployment.
 - Real LLM context agent in production — currently `LLM_PROVIDER=mock` on
   the live deployment (no API key configured yet); the Anthropic-backed
   path is implemented, just switching it on is pending a cost/quality
