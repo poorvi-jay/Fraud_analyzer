@@ -3,6 +3,8 @@ import type {
   EvaluationSummary,
   OverrideDecision,
   ReviewResult,
+  SimulateRequest,
+  SimulateResponse,
   TransactionDetail,
   TransactionListItem,
   Verdict,
@@ -71,4 +73,12 @@ export function getVerdictTrend(): Promise<VerdictTrendRow[]> {
 
 export function getEvaluationSummary(): Promise<EvaluationSummary> {
   return request("/analytics/evaluation-summary");
+}
+
+export function simulateTransaction(payload: SimulateRequest): Promise<SimulateResponse> {
+  return request("/transactions/simulate", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
 }

@@ -72,6 +72,28 @@ export interface VerdictTrendRow {
   block: number;
 }
 
+export interface InlineProfile {
+  home_country: string;
+  typical_transaction_amount: number;
+  travel_frequency: "never" | "rare" | "frequent";
+  account_age_days: number;
+}
+
+export interface SimulateRequest {
+  profile: InlineProfile;
+  amount: number;
+  transaction_type: string;
+  origin_balance_before: number;
+  origin_balance_after: number;
+  location_country: string;
+}
+
+export interface SimulateResponse {
+  opinions: AgentOpinion[];
+  final_verdict: Verdict;
+  coordinator_reasoning: string;
+}
+
 export interface EvaluationSummary {
   n_test: number;
   n_fraud: number;

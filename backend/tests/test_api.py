@@ -90,6 +90,88 @@ def test_override_escalated_case_persists_and_is_visible_on_detail(client, escal
     assert human_reviews[0]["note"] == "confirmed fraud after review"
 
 
+def test_simulate_with_existing_user_returns_verdict_and_persists_nothing(client, sample_profile):
+    listing_before = client.get("/transactions").json()
+
+    resp = client.post(
+        "/transactions/simulate",
+        json={
+            "user_id": sample_profile.user_id,
+            "amount": 150.0,
+            "transaction_type": "PAYMENT",
+            "origin_balance_before": 1000.0,
+            "origin_balance_after": 850.0,
+            "location_country": "US",
+            "occurred_at": "2024-06-15T10:00:00",
+        },
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert len(body["opinions"]) == 3
+    assert body["final_verdict"] in ("allow", "escalate", "block")
+
+    listing_after = client.get("/transactions").json()
+    assert len(listing_after) == len(listing_before)
+
+
+def test_simulate_with_inline_profile(client):
+    resp = client.post(
+        "/transactions/simulate",
+        json={
+            "profile": {
+                "home_country": "US",
+                "typical_transaction_amount": 200.0,
+                "travel_frequency": "never",
+                "account_age_days": 400,
+            },
+            "amount": 8000.0,
+            "transaction_type": "TRANSFER",
+            "origin_balance_before": 8000.0,
+            "origin_balance_after": 0.0,
+            "location_country": "FR",
+            "occurred_at": "2024-06-15T10:00:00",
+        },
+    )
+    assert resp.status_code == 200
+    assert resp.json()["final_verdict"] == "block"
+
+
+def test_simulate_without_user_id_or_profile_returns_422(client):
+    resp = client.post(
+        "/transactions/simulate",
+        json={
+            "amount": 100.0,
+            "transaction_type": "PAYMENT",
+            "origin_balance_before": 500.0,
+            "origin_balance_after": 400.0,
+            "location_country": "US",
+        },
+    )
+    assert resp.status_code == 422
+
+
+def test_simulate_unknown_user_returns_404(client):
+    resp = client.post(
+        "/transactions/simulate",
+        json={
+            "user_id": "nobody",
+            "amount": 100.0,
+            "transaction_type": "PAYMENT",
+            "origin_balance_before": 500.0,
+            "origin_balance_after": 400.0,
+            "location_country": "US",
+        },
+    )
+    assert resp.status_code == 404
+
+
+def test_example_users_returns_list(client, sample_profile):
+    resp = client.get("/transactions/example-users")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert any(u["user_id"] == sample_profile.user_id for u in body)
+
+
 def test_override_unknown_review_result_returns_404(client, mock_reviewer):
     resp = client.post(
         "/reviews/does-not-exist/override",

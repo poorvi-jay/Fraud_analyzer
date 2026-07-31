@@ -115,6 +115,10 @@ export default function Home() {
       <section>
         <h3>Explore this demo</h3>
         <div className="home-actions">
+          <Link to="/playground" className="home-action">
+            <strong>Try it yourself &rarr;</strong>
+            <span>Build a transaction and a user profile from scratch, then watch all three agents investigate it live.</span>
+          </Link>
           <Link to="/queue" className="home-action">
             <strong>Case queue &rarr;</strong>
             <span>Browse reviewed transactions. Click into any case to see all three agent opinions side by side.</span>

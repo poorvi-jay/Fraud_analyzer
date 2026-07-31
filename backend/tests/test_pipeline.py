@@ -2,8 +2,8 @@ from datetime import datetime
 
 import pytest
 
-from app.agents.pipeline import UnknownUserError, run_pipeline
-from app.schemas import TransactionReviewRequest
+from app.agents.pipeline import UnknownUserError, run_pipeline, run_simulation
+from app.schemas import InlineProfile, SimulateRequest, TransactionReviewRequest
 
 
 def test_run_pipeline_persists_opinions_and_verdict(db_session, sample_profile):
@@ -49,3 +49,64 @@ def test_run_pipeline_obvious_fraud_pattern_blocks(db_session, sample_profile):
     )
     txn = run_pipeline(db_session, payload)
     assert txn.review_result.final_verdict == "block"
+
+
+def test_run_simulation_with_existing_user_persists_nothing(db_session, sample_profile):
+    from sqlalchemy import func, select
+
+    from app.models import Transaction
+
+    before = db_session.execute(select(func.count()).select_from(Transaction)).scalar_one()
+
+    payload = SimulateRequest(
+        user_id=sample_profile.user_id,
+        amount=180.0,
+        transaction_type="PAYMENT",
+        origin_balance_before=1000.0,
+        origin_balance_after=820.0,
+        location_country="US",
+        occurred_at=datetime(2024, 6, 15, 10, 0, 0),
+    )
+    result = run_simulation(db_session, payload)
+
+    assert {result.anomaly.agent_name, result.context.agent_name, result.policy.agent_name} == {
+        "anomaly_agent",
+        "context_agent",
+        "policy_agent",
+    }
+    assert result.verdict.final_verdict in ("allow", "escalate", "block")
+
+    after = db_session.execute(select(func.count()).select_from(Transaction)).scalar_one()
+    assert after == before
+
+
+def test_run_simulation_with_inline_profile_obvious_fraud_pattern_blocks(db_session):
+    payload = SimulateRequest(
+        profile=InlineProfile(
+            home_country="US",
+            typical_transaction_amount=200.0,
+            travel_frequency="never",
+            account_age_days=400,
+        ),
+        amount=8000.0,
+        transaction_type="TRANSFER",
+        origin_balance_before=8000.0,
+        origin_balance_after=0.0,
+        location_country="FR",
+        occurred_at=datetime(2024, 6, 15, 10, 0, 0),
+    )
+    result = run_simulation(db_session, payload)
+    assert result.verdict.final_verdict == "block"
+
+
+def test_run_simulation_unknown_user_raises(db_session):
+    payload = SimulateRequest(
+        user_id="does-not-exist",
+        amount=100.0,
+        transaction_type="PAYMENT",
+        origin_balance_before=500.0,
+        origin_balance_after=400.0,
+        location_country="US",
+    )
+    with pytest.raises(UnknownUserError):
+        run_simulation(db_session, payload)

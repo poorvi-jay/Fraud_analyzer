@@ -6,6 +6,7 @@ import CaseDetail from "./pages/CaseDetail";
 import CaseQueue from "./pages/CaseQueue";
 import Home from "./pages/Home";
 import Login from "./pages/Login";
+import Playground from "./pages/Playground";
 
 function HeaderAuth() {
   const { session, loading, signOut } = useAuth();
@@ -35,6 +36,7 @@ function AppShell() {
           <div className="header-meta">
             <nav className="nav-links">
               <Link to="/">Home</Link>
+              <Link to="/playground">Try it yourself</Link>
               <Link to="/queue">Case queue</Link>
               <Link to="/analytics">Analytics</Link>
             </nav>
@@ -44,6 +46,7 @@ function AppShell() {
         <main>
           <Routes>
             <Route path="/" element={<Home />} />
+            <Route path="/playground" element={<Playground />} />
             <Route path="/queue" element={<CaseQueue />} />
             <Route path="/cases/:id" element={<CaseDetail />} />
             <Route path="/analytics" element={<Analytics />} />

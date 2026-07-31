@@ -2,12 +2,19 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy import select
 from sqlalchemy.orm import Session, joinedload
 
-from app.agents.pipeline import UnknownUserError, run_pipeline
+from app.agents.pipeline import UnknownUserError, run_pipeline, run_simulation
 from app.db import get_db
-from app.models import ReviewResult, Transaction
+from app.models import ReviewResult, Transaction, UserProfile
 from app.rate_limit import limiter
 from app.config import settings
-from app.schemas import TransactionDetail, TransactionListItem, TransactionReviewRequest
+from app.schemas import (
+    ExampleUserOut,
+    SimulateRequest,
+    SimulateResponse,
+    TransactionDetail,
+    TransactionListItem,
+    TransactionReviewRequest,
+)
 
 router = APIRouter(prefix="/transactions", tags=["transactions"])
 
@@ -20,6 +27,33 @@ def review_transaction(request: Request, payload: TransactionReviewRequest, db: 
     except UnknownUserError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
     return txn
+
+
+@router.post("/simulate", response_model=SimulateResponse)
+@limiter.limit(settings.review_rate_limit)
+def simulate_transaction(request: Request, payload: SimulateRequest, db: Session = Depends(get_db)):
+    """Playground endpoint: runs the full pipeline but never persists
+    anything (see run_simulation) so visitors can try arbitrary scenarios
+    without polluting the demo queue.
+    """
+    try:
+        result = run_simulation(db, payload)
+    except UnknownUserError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    return SimulateResponse(
+        opinions=[result.anomaly, result.context, result.policy],
+        final_verdict=result.verdict.final_verdict,
+        coordinator_reasoning=result.verdict.coordinator_reasoning,
+    )
+
+
+@router.get("/example-users", response_model=list[ExampleUserOut])
+def list_example_users(limit: int = Query(default=6, le=20), db: Session = Depends(get_db)):
+    """A handful of real seeded users, for the playground's 'use an existing
+    profile' picker.
+    """
+    stmt = select(UserProfile).order_by(UserProfile.user_id).limit(limit)
+    return db.execute(stmt).scalars().all()
 
 
 @router.get("", response_model=list[TransactionListItem])

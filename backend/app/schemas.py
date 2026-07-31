@@ -1,7 +1,7 @@
-from datetime import datetime
+from datetime import date, datetime
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class TransactionReviewRequest(BaseModel):
@@ -76,3 +76,53 @@ class TransactionDetail(BaseModel):
     is_fraud_ground_truth: bool | None
     opinions: list[AgentOpinionOut]
     review_result: ReviewResultOut | None
+
+
+class ExampleUserOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    user_id: str
+    home_country: str
+    typical_transaction_amount: float
+    travel_frequency: str
+    account_created: date
+
+
+class InlineProfile(BaseModel):
+    """A visitor-authored stand-in for a UserProfile row, used by the
+    playground so a transaction can be judged without an existing seeded
+    user -- see SimulateRequest.
+    """
+
+    home_country: str
+    typical_transaction_amount: float = Field(gt=0)
+    travel_frequency: Literal["never", "rare", "frequent"]
+    account_age_days: int = Field(ge=0)
+
+
+class SimulateRequest(BaseModel):
+    """Playground input: run the full agent pipeline against either an
+    existing seeded user (user_id) or a visitor-built profile (profile),
+    without persisting anything -- see run_simulation().
+    """
+
+    user_id: str | None = None
+    profile: InlineProfile | None = None
+    amount: float
+    transaction_type: str
+    origin_balance_before: float
+    origin_balance_after: float
+    location_country: str
+    occurred_at: datetime | None = None
+
+    @model_validator(mode="after")
+    def _require_profile_source(self):
+        if not self.user_id and self.profile is None:
+            raise ValueError("either user_id or profile must be provided")
+        return self
+
+
+class SimulateResponse(BaseModel):
+    opinions: list[AgentOpinionOut]
+    final_verdict: str
+    coordinator_reasoning: str

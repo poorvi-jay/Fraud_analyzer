@@ -441,3 +441,49 @@ button:disabled {
   font-size: 13px;
   color: var(--ink-muted);
 }
+
+/* Playground */
+.playground-form fieldset {
+  border: 1px solid var(--border);
+  padding: 14px 16px 16px;
+  margin: 0 0 16px;
+}
+
+.playground-form legend {
+  font-family: var(--serif);
+  font-weight: 600;
+  font-size: 13px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 0 6px;
+}
+
+.playground-form .form-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 12px;
+}
+
+.playground-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--ink-muted);
+}
+
+.playground-form select {
+  width: 100%;
+}
+
+.investigation {
+  margin-top: 28px;
+}
+
+.opinion-card.pending {
+  opacity: 0.55;
+}
+
+.opinion-card.pending .subtle {
+  font-style: italic;
+}

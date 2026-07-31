@@ -1,11 +1,14 @@
-from datetime import datetime, timezone
+from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy.orm import Session
 
 from app.agents import anomaly_agent, context_agent, coordinator_agent, policy_agent
+from app.agents.base import AgentOpinion
+from app.agents.coordinator_agent import Verdict
 from app.models import AgentOpinion as AgentOpinionRow
 from app.models import ReviewResult, Transaction, UserProfile
-from app.schemas import TransactionReviewRequest
+from app.schemas import SimulateRequest, TransactionReviewRequest
 
 
 class UnknownUserError(ValueError):
@@ -96,3 +99,51 @@ def run_pipeline(db: Session, payload: TransactionReviewRequest) -> Transaction:
 
     db.refresh(txn)
     return txn
+
+
+@dataclass(frozen=True)
+class SimulationResult:
+    anomaly: AgentOpinion
+    context: AgentOpinion
+    policy: AgentOpinion
+    verdict: Verdict
+
+
+def run_simulation(db: Session, payload: SimulateRequest) -> SimulationResult:
+    """Playground path: runs the same three agents + coordinator as
+    run_pipeline, but never touches the database -- no Transaction,
+    AgentOpinion, or ReviewResult row is ever created. Lets a visitor try an
+    arbitrary user_id/profile combination without polluting the demo queue.
+    """
+    occurred_at = payload.occurred_at or datetime.now(timezone.utc).replace(tzinfo=None)
+
+    if payload.profile is not None:
+        profile_dict = {
+            "user_id": payload.user_id or "sandbox",
+            "account_created": occurred_at.date() - timedelta(days=payload.profile.account_age_days),
+            "home_country": payload.profile.home_country,
+            "typical_transaction_amount": payload.profile.typical_transaction_amount,
+            "travel_frequency": payload.profile.travel_frequency,
+        }
+    else:
+        profile = db.get(UserProfile, payload.user_id)
+        if profile is None:
+            raise UnknownUserError(f"No user_profile found for user_id={payload.user_id!r}")
+        profile_dict = _profile_to_dict(profile)
+
+    txn_dict = {
+        "amount": payload.amount,
+        "transaction_type": payload.transaction_type,
+        "origin_balance_before": payload.origin_balance_before,
+        "origin_balance_after": payload.origin_balance_after,
+        "location_country": payload.location_country,
+        "occurred_at": occurred_at,
+    }
+    account_age_days = max((occurred_at.date() - profile_dict["account_created"]).days, 0)
+
+    policy_opinion = policy_agent.run(txn_dict, profile_dict, account_age_days)
+    anomaly_opinion = anomaly_agent.run(txn_dict)
+    context_opinion = context_agent.run(txn_dict, profile_dict)
+    verdict = coordinator_agent.run(anomaly_opinion, context_opinion, policy_opinion)
+
+    return SimulationResult(anomaly=anomaly_opinion, context=context_opinion, policy=policy_opinion, verdict=verdict)
