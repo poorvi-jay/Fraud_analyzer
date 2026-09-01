@@ -60,6 +60,20 @@ client and issues a JWT the backend then verifies.
   context -> escalate; low anomaly + implausible context -> escalate;
   otherwise allow)
 
+**Ingestion adapters** (`backend/app/adapters/`)
+- Added after the original design, for Razorpay Buildathon Track 02.
+- Transform a provider's payload into the internal transaction dict the
+  four agents already consume. The agents are *not* provider-aware:
+  everything provider-specific resolves in the adapter, and both the
+  PaySim-shaped and Razorpay-shaped paths call the same
+  `pipeline.run_agents()`.
+- `razorpay_adapter` maps a Razorpay test-mode Payment object. Several
+  features have no Razorpay equivalent (balances, fund-flow transaction
+  type, observed country) and the adapter refuses to fabricate them --
+  it reports `feature_availability` alongside every verdict, and can
+  skip the anomaly model entirely rather than score it on invented
+  inputs. See `docs/RAZORPAY_ADAPTER.md`.
+
 **Supabase**
 - Postgres for all persisted data (schema in Section 3)
 - Auth for reviewer login (email/password or magic link - either
@@ -134,11 +148,15 @@ transactions have no ground truth.
 |---|---|---|---|
 | GET | `/health` | Liveness check | None |
 | POST | `/transactions/review` | Run the full pipeline on a transaction, persist the result | None (public demo) |
+| POST | `/transactions/simulate` | Run the pipeline without persisting - playground | None |
+| POST | `/transactions/razorpay/simulate` | Same, from a Razorpay Payment object via `adapters/razorpay_adapter` | None |
+| GET | `/transactions/example-users` | Seeded profiles for the playground picker | None |
 | GET | `/transactions` | List the case queue, filterable by verdict | None |
 | GET | `/transactions/{id}` | Case detail - all agent opinions + verdict | None |
 | POST | `/reviews/{id}/override` | Human reviewer decision on an escalated case | Reviewer JWT required |
 | GET | `/analytics/verdict-distribution` | Counts by verdict | None |
 | GET | `/analytics/agent-agreement-rate` | How often agents agree vs. conflict | None |
+| GET | `/analytics/verdict-trend` | Verdict volume over time | None |
 | GET | `/analytics/evaluation-summary` | Baseline vs. multi-agent comparison stats | None |
 
 Queue/detail/analytics endpoints stay unauthenticated deliberately -
@@ -185,6 +203,14 @@ management from scratch.
 
 ## 8. Evaluation methodology
 
+0. Calibrate any dataset-relative threshold (`policy_agent`'s reporting
+   threshold) on the **training rows only**, using the same split call as
+   step 1. `policy_agent` flags on that threshold and a policy flag
+   hard-overrides the coordinator into `block`, so a threshold fitted on
+   the full dataset would make the step-4 false-positive rate partly a
+   number about its own test set. `ml/diagnose_thresholds.py` likewise
+   reports the training split by default, so the tuning surface a human
+   actually reads never shows held-out outcomes unless explicitly asked.
 1. Hold out a test split of the PaySim-derived dataset (with ground
    truth `is_fraud` labels) that the anomaly model never trains on.
 2. Run that test split through the anomaly model alone - this is the

@@ -2,13 +2,22 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy import select
 from sqlalchemy.orm import Session, joinedload
 
-from app.agents.pipeline import UnknownUserError, run_pipeline, run_simulation
+from app.agents.pipeline import (
+    RazorpayDegradedModeError,
+    RazorpayIngestionError,
+    UnknownUserError,
+    run_pipeline,
+    run_razorpay_simulation,
+    run_simulation,
+)
 from app.db import get_db
 from app.models import ReviewResult, Transaction, UserProfile
 from app.rate_limit import limiter
 from app.config import settings
 from app.schemas import (
     ExampleUserOut,
+    RazorpaySimulateRequest,
+    RazorpaySimulateResponse,
     SimulateRequest,
     SimulateResponse,
     TransactionDetail,
@@ -44,6 +53,50 @@ def simulate_transaction(request: Request, payload: SimulateRequest, db: Session
         opinions=[result.anomaly, result.context, result.policy],
         final_verdict=result.verdict.final_verdict,
         coordinator_reasoning=result.verdict.coordinator_reasoning,
+    )
+
+
+@router.post("/razorpay/simulate", response_model=RazorpaySimulateResponse)
+@limiter.limit(settings.review_rate_limit)
+def simulate_razorpay_payment(
+    request: Request, payload: RazorpaySimulateRequest, db: Session = Depends(get_db)
+):
+    """Razorpay ingestion: score a test-mode Payment object through the same
+    four agents, via app/adapters/razorpay_adapter.py.
+
+    Deliberately a separate endpoint rather than a second shape accepted by
+    POST /transactions/simulate. Three reasons: (1) the response has to carry
+    feature_availability and adapter_warnings, which are meaningless for the
+    PaySim-shaped path -- folding them into SimulateResponse would put
+    permanently-null fields on every playground call; (2) a discriminated
+    union request body makes /docs markedly harder to read for the one
+    audience that matters here, someone trying the API for the first time;
+    (3) the existing contract stays byte-for-byte unchanged, so the
+    playground frontend needs no edit. The cost is one more route and a
+    little duplicated wiring, which is cheaper than either alternative.
+
+    Like /simulate, this never writes to the database.
+    """
+    try:
+        result = run_razorpay_simulation(db, payload)
+    except UnknownUserError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except RazorpayDegradedModeError as exc:
+        # 422: the payload is well-formed but can't be scored at full
+        # fidelity, and the caller hasn't said that's acceptable.
+        raise HTTPException(status_code=422, detail=str(exc))
+    except RazorpayIngestionError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    simulation = result.simulation
+    return RazorpaySimulateResponse(
+        opinions=[simulation.anomaly, simulation.context, simulation.policy],
+        final_verdict=simulation.verdict.final_verdict,
+        coordinator_reasoning=simulation.verdict.coordinator_reasoning,
+        user_id=result.adapted.user_id,
+        anomaly_scored=result.adapted.anomaly_scorable,
+        feature_availability=result.adapted.feature_availability,
+        adapter_warnings=result.adapted.warnings,
     )
 
 

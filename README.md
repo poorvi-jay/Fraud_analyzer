@@ -43,6 +43,17 @@ using the **real Kaggle PaySim dataset** (6.36M transactions):
 | Strict false positive rate | 0.60% (flagged) | **0.43%** (wrongly auto-blocked) |
 | Escalated to a human | — | 0.71% of all cases |
 
+These numbers are measured with `policy_agent`'s reporting threshold
+calibrated on the **training rows only**. An earlier version took that
+percentile over the whole dataset, test rows included — one scalar, but a
+real leak, since a policy flag hard-overrides the coordinator into `block`
+and the false-positive rate above is partly a policy-rule rate. Fixing it
+moved the threshold $2,437,745.64 → $2,439,919.22 (+0.089%) and changed
+**none** of the numbers below: zero rows in the evaluated sample fall
+between the two values (9 in the full 1.59M-row test split). The leak was
+real but inert — worth stating precisely rather than either hiding or
+overselling.
+
 The honest finding here: on real PaySim, the anomaly model *alone* already
 scores ROC-AUC 0.9993 on the full 1.58M-row test set — it catches nearly
 all fraud on its own, because real PaySim's fraud is always the exact same
@@ -82,6 +93,57 @@ disagreement is what a human should look at.
 | clear | high | plausible | `escalate` |
 | clear | low | implausible | `escalate` |
 | clear | low | plausible | `allow` |
+
+## Razorpay ingestion
+
+`POST /transactions/razorpay/simulate` accepts a Razorpay test-mode Payment
+object and scores it through the same four agents, via
+[`backend/app/adapters/razorpay_adapter.py`](backend/app/adapters/razorpay_adapter.py).
+No agent was modified — all provider-specific mapping lives in the adapter.
+
+**Read [`docs/RAZORPAY_ADAPTER.md`](docs/RAZORPAY_ADAPTER.md) before trusting
+a verdict from this path.** The short version of what does not survive the
+mapping:
+
+| Feature | Status on Razorpay input |
+|---|---|
+| `amount`, `occurred_at` | exact |
+| `amount_to_typical_ratio`, `is_foreign`, `account_age_days` | intact, but see below |
+| `transaction_type` one-hots (5 features) | **constant → zero signal** |
+| `origin_balance_before/after`, `balance_drained_ratio` (3 features) | **unavailable** |
+
+Razorpay's Payment object carries no account balance and no country, and its
+`method` field is a payment-*instrument* taxonomy where PaySim's `type` is a
+fund-*flow* taxonomy — they are different axes, so there is no honest
+per-method mapping. The adapter refuses to invent any of it:
+
+- **Balances**: supply `balance_context` from your own ledger, or send
+  `allow_degraded: true` and the anomaly model **is not run at all** (the
+  response sets `anomaly_scored: false` and the opinion reads
+  `[NOT SCORED -- inputs unavailable]`). Send neither and you get a 422.
+  Defaulting balances to `0` puts the model off-manifold; defaulting them to
+  `amount` reproduces PaySim's exact fraud signature and would make every
+  payment look fraudulent. Both are worse than admitting the gap.
+- **Country**: `international` is mapped to an `XX` sentinel meaning "not the
+  customer's home country", never a specific country.
+- **History**: Razorpay serves no per-customer spend history, so
+  `typical_transaction_amount` has to be maintained by us, keyed by
+  `customer_id` — which is what `user_profiles` already is. Cold start means
+  no profile-relative signal at all.
+
+Every response carries `feature_availability` and `adapter_warnings`; a
+verdict from this endpoint should never be read without them.
+
+Full-fidelity example (balances supplied from your own ledger, in rupees —
+Razorpay's own `amount` stays in paise):
+
+```bash
+curl -X POST http://localhost:8000/transactions/razorpay/simulate -H 'Content-Type: application/json' -d '{"payment":{"id":"pay_29QQoUBi66xm2f","entity":"payment","amount":100000,"currency":"INR","status":"captured","method":"card","international":false,"customer_id":"cust_DitrYCFtCIokBO","email":"gaurav.kumar@example.com","contact":"9000090000","created_at":1718000000},"balance_context":{"origin_balance_before":5000.0,"origin_balance_after":4000.0},"profile":{"home_country":"IN","typical_transaction_amount":900.0,"travel_frequency":"rare","account_age_days":400}}'
+```
+
+Drop `balance_context` and you get a 422 explaining why. Add
+`"allow_degraded": true` instead and it scores with the anomaly model
+skipped, `anomaly_scored: false`, and the reason in the warnings.
 
 ## Running it locally
 
@@ -222,6 +284,27 @@ Supabase project of your own — no need to share the live one).
   balance drain via TRANSFER), which means the anomaly model alone already
   performs very well against it — see the Result section above for what
   that does and doesn't say about the multi-agent design.
+- **Razorpay-sourced transactions are scored on strictly less information
+  than PaySim-sourced ones.** 3 of the anomaly model's 9 features have no
+  Razorpay equivalent and 5 more go constant; in degraded mode the model is
+  skipped entirely and the verdict rests on the context and policy agents
+  alone. Because a skipped anomaly opinion carries `flag=False`, the
+  coordinator table reduces to *context implausible → escalate, context
+  plausible → allow* — so a degraded Razorpay payment **can be auto-allowed
+  without the anomaly model ever having run**. It can never be auto-blocked
+  on a fabricated signal, which is the conservative direction, but "allow"
+  from this path is a weaker claim than "allow" from the PaySim path. See
+  [`docs/RAZORPAY_ADAPTER.md`](docs/RAZORPAY_ADAPTER.md).
+- **The anomaly model has never been evaluated on Razorpay-shaped data.**
+  Every number in the Result section is measured on PaySim. The adapter is
+  tested for correct mapping and correct degradation, not for predictive
+  accuracy on real Razorpay traffic — no labelled Razorpay fraud data was
+  used at any point, so there is no honest accuracy claim to make for that
+  path yet.
+- **`typical_transaction_amount` is not a Razorpay-derived quantity.** For
+  Razorpay input it comes from whatever history we have accumulated
+  ourselves. On a cold start there is none, and the context agent's
+  profile-relative judgement is only as good as that store.
 
 ## What's not done yet (stretch, per the PRD)
 
