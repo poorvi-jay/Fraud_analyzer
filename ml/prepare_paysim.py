@@ -21,6 +21,7 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+from sklearn.model_selection import train_test_split
 
 DATA_DIR = Path(__file__).resolve().parent.parent / "data"
 REAL_PAYSIM_PATH = DATA_DIR / "paysim.csv"
@@ -242,6 +243,48 @@ def adapt_real_paysim(raw: pd.DataFrame, rng: np.random.Generator) -> tuple[pd.D
     return raw[cols], profiles
 
 
+def calibrate_on_train_split(transactions: pd.DataFrame) -> dict:
+    """Compute policy_agent's dataset-relative thresholds from the TRAINING
+    rows only.
+
+    This deliberately mirrors ml/train_anomaly_model.py's split call --
+    test_size=0.25, random_state=42, stratify=is_fraud_ground_truth -- so
+    the rows used here are exactly the rows the anomaly model trains on,
+    and the rows ml/evaluate_baseline.py scores against are untouched by
+    calibration.
+
+    Why this matters: an earlier version took the 99.5th percentile over
+    the *whole* dataset, test rows included. It's only one scalar drawn
+    from a marginal distribution, so the practical effect is small -- but
+    policy_agent flags on it, a policy flag hard-overrides the coordinator
+    into `block`, and evaluate_baseline.py then reports a false-positive
+    rate for a threshold that had already seen its own test set. Small leak,
+    real leak; reported numbers shouldn't need an asterisk.
+
+    Positional alignment with train_anomaly_model.py holds because the
+    frame passed here is the same frame, in the same row order, that is
+    written to transactions.csv and read back by both downstream scripts;
+    sklearn stratifies on sorted unique label values, so a bool column and
+    its .astype(int) form produce the same partition.
+    """
+    train_transactions, _ = train_test_split(
+        transactions,
+        test_size=0.25,
+        random_state=42,
+        stratify=transactions["is_fraud_ground_truth"],
+    )
+    threshold = round(float(train_transactions["amount"].quantile(0.995)), 2)
+    return {
+        "large_reporting_threshold": threshold,
+        # Provenance, so the number is auditable later. policy_agent reads
+        # only large_reporting_threshold and ignores everything else here.
+        "calibrated_on": "train split only (test_size=0.25, random_state=42, stratify=is_fraud_ground_truth)",
+        "quantile": 0.995,
+        "n_calibration_rows": int(len(train_transactions)),
+        "n_rows_total": int(len(transactions)),
+    }
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--n-users", type=int, default=3000)
@@ -271,15 +314,18 @@ def main():
     # genuinely unusual amounts. A fixed dollar figure doesn't transfer
     # across datasets of very different scale (real PaySim's amounts run
     # ~1000x our synthetic data's), so calibrate it here to this dataset's
-    # own distribution instead of hardcoding it in policy_agent.py.
-    large_reporting_threshold = round(float(transactions["amount"].quantile(0.995)), 2)
-    calibration = {"large_reporting_threshold": large_reporting_threshold}
+    # own distribution instead of hardcoding it in policy_agent.py --
+    # using the TRAINING rows only, so the held-out test split stays
+    # genuinely held out (see calibrate_on_train_split).
+    calibration = calibrate_on_train_split(transactions)
+    large_reporting_threshold = calibration["large_reporting_threshold"]
     models_dir = DATA_DIR.parent / "ml" / "models"
     models_dir.mkdir(parents=True, exist_ok=True)
     with open(models_dir / "policy_calibration.json", "w") as f:
         json.dump(calibration, f, indent=2)
     print(f"Calibrated large_reporting_threshold = ${large_reporting_threshold:,.2f} "
-          f"(99.5th percentile of amount) -> {models_dir / 'policy_calibration.json'}")
+          f"(99.5th percentile of amount over {calibration['n_calibration_rows']:,} TRAIN rows "
+          f"of {calibration['n_rows_total']:,}) -> {models_dir / 'policy_calibration.json'}")
 
 
 if __name__ == "__main__":

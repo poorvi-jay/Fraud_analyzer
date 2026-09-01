@@ -1,3 +1,7 @@
 {
-  "large_reporting_threshold": 2437745.64
+  "large_reporting_threshold": 2439919.22,
+  "calibrated_on": "train split only (test_size=0.25, random_state=42, stratify=is_fraud_ground_truth)",
+  "quantile": 0.995,
+  "n_calibration_rows": 4771965,
+  "n_rows_total": 6362620
 }
