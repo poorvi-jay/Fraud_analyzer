@@ -110,3 +110,33 @@ export interface EvaluationSummary {
     escalation_rate: number;
   };
 }
+
+// --- Razorpay ingestion (see backend/app/adapters/razorpay_adapter.py) ---
+
+export interface RazorpayBalanceContext {
+  origin_balance_before: number;
+  origin_balance_after: number;
+}
+
+export interface RazorpaySimulateRequest {
+  /** A raw Razorpay Payment object. Deliberately untyped: the adapter
+   *  accepts extra fields, and the point of this screen is to paste a real
+   *  payload unmodified. */
+  payment: Record<string, unknown>;
+  profile?: InlineProfile;
+  balance_context?: RazorpayBalanceContext;
+  allow_degraded?: boolean;
+}
+
+export interface RazorpaySimulateResponse {
+  opinions: AgentOpinion[];
+  final_verdict: Verdict;
+  coordinator_reasoning: string;
+  user_id: string;
+  /** False when the anomaly model was skipped for lack of balance inputs.
+   *  When false, that agent's score is NOT a risk reading -- see the note
+   *  rendered next to it. */
+  anomaly_scored: boolean;
+  feature_availability: Record<string, boolean>;
+  adapter_warnings: string[];
+}

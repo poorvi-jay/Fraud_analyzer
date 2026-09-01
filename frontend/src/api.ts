@@ -3,6 +3,8 @@ import type {
   EvaluationSummary,
   OverrideDecision,
   ReviewResult,
+  RazorpaySimulateRequest,
+  RazorpaySimulateResponse,
   SimulateRequest,
   SimulateResponse,
   TransactionDetail,
@@ -77,6 +79,16 @@ export function getEvaluationSummary(): Promise<EvaluationSummary> {
 
 export function simulateTransaction(payload: SimulateRequest): Promise<SimulateResponse> {
   return request("/transactions/simulate", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+}
+
+export function simulateRazorpayPayment(
+  payload: RazorpaySimulateRequest
+): Promise<RazorpaySimulateResponse> {
+  return request("/transactions/razorpay/simulate", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),

@@ -487,3 +487,91 @@ button:disabled {
 .opinion-card.pending .subtle {
   font-style: italic;
 }
+/* Razorpay ingestion screen. The visual job here is different from the
+   other playground: the verdict is the least important thing on the page,
+   because a Razorpay-sourced verdict rests on strictly less information
+   than a PaySim-sourced one. Degradation is styled to be impossible to
+   skim past, in red ink, per the same ledger convention as a flagged
+   entry. */
+.preset-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  margin-bottom: 12px;
+}
+
+.json-input {
+  width: 100%;
+  font-family: var(--mono);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+/* Needs the .playground-form prefix: `.playground-form label` sets
+   flex-direction: column for the stacked field labels, and would otherwise
+   out-specify this and stack the checkbox above its own text. */
+.playground-form label.checkbox-row {
+  display: flex;
+  flex-direction: row;
+  align-items: flex-start;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--ink);
+  margin-bottom: 8px;
+}
+
+.playground-form label.checkbox-row input {
+  width: auto;
+  margin-top: 3px;
+  flex: none;
+}
+
+.degraded-banner {
+  border: 1px solid var(--red);
+  border-left-width: 4px;
+  background: var(--red-soft);
+  color: var(--red);
+  padding: 10px 14px;
+  font-size: 13px;
+  margin: 0 0 20px;
+}
+
+/* An unscored agent is neither "clear" nor "flagged" -- it is an absence.
+   Dashed border so it reads as a gap in the ledger rather than an entry. */
+.opinion-card.unscored {
+  border-style: dashed;
+  border-color: var(--ink-muted);
+  background: var(--paper-alt);
+}
+
+.opinion-card.unscored .score {
+  color: var(--red);
+  text-transform: uppercase;
+  font-size: 11px;
+  letter-spacing: 0.06em;
+}
+
+.feature-availability td:nth-child(2) {
+  white-space: nowrap;
+  font-size: 12px;
+}
+
+.feature-availability td.unavailable {
+  color: var(--red);
+  font-weight: 700;
+}
+
+.feature-availability td:last-child {
+  font-size: 12px;
+}
+
+.adapter-warnings {
+  margin: 0 0 24px;
+  padding-left: 20px;
+  font-size: 13px;
+  color: var(--ink-muted);
+}
+
+.adapter-warnings li {
+  margin-bottom: 8px;
+}

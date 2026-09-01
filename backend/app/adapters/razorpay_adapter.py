@@ -77,12 +77,21 @@ FOREIGN_SENTINEL_COUNTRY = "XX"
 FOREIGN_SENTINEL_FALLBACK = "ZZ"
 
 # Razorpay quotes `amount` in the currency's minor unit ("for an amount of
-# $1 enter 100"). Most currencies are 2-decimal; these are the exceptions
-# we can state confidently. Anything unlisted falls back to 2 and says so.
+# $1 enter 100"). Most currencies are 2-decimal; these are the exceptions.
 _MINOR_UNIT_EXPONENT = {
     "JPY": 0, "KRW": 0, "VND": 0, "CLP": 0, "ISK": 0, "XAF": 0, "XOF": 0, "XPF": 0,
     "KWD": 3, "BHD": 3, "OMR": 3, "JOD": 3, "TND": 3,
 }
+# Currencies we are confident are 2-decimal, so no warning is emitted. This
+# list has to exist separately from the exceptions above: without it every
+# ordinary currency -- INR included, which is most of Razorpay's traffic --
+# falls through to the "unknown, assumed" branch and warns. A warning that
+# fires on the common case is noise, and noise is what stops anyone reading
+# the genuinely important warnings further down the list.
+_KNOWN_TWO_DECIMAL = frozenset({
+    "INR", "USD", "EUR", "GBP", "AUD", "CAD", "SGD", "AED", "MYR", "CHF",
+    "HKD", "NZD", "SEK", "NOK", "DKK", "ZAR", "THB", "CNY", "SAR", "QAR",
+})
 _DEFAULT_MINOR_UNIT_EXPONENT = 2
 
 # Only these statuses represent money that actually moved. `created` and
@@ -130,10 +139,12 @@ def to_major_units(amount_subunits: int, currency: str) -> tuple[float, str | No
     warning = None
     if code in _MINOR_UNIT_EXPONENT:
         exponent = _MINOR_UNIT_EXPONENT[code]
+    elif code in _KNOWN_TWO_DECIMAL:
+        exponent = 2
     else:
         exponent = _DEFAULT_MINOR_UNIT_EXPONENT
         warning = (
-            f"currency {code!r} is not in the adapter's minor-unit table; assumed "
+            f"currency {code!r} is in neither of the adapter's minor-unit tables; assumed "
             f"{_DEFAULT_MINOR_UNIT_EXPONENT} decimal places. Verify before trusting the amount."
         )
     return float(amount_subunits) / (10 ** exponent), warning

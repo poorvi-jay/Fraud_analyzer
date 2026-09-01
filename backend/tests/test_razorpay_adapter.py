@@ -81,7 +81,21 @@ def test_unknown_currency_assumes_two_decimals_and_says_so():
         razorpay_test_payment(currency="XYZ"), home_country="IN",
         balance_context=razorpay_adapter.BalanceContext(**LEDGER_BALANCES),
     )
-    assert any("not in the adapter's minor-unit table" in w for w in adapted.warnings)
+    assert any("minor-unit table" in w for w in adapted.warnings)
+
+
+def test_common_currencies_do_not_emit_a_currency_warning():
+    """Regression: the exceptions table lists only non-2-decimal currencies,
+    so every ordinary currency -- INR above all, which is most of Razorpay's
+    traffic -- used to fall through to the "unknown, assumed" branch and warn.
+    A warning on the common case is noise that buries the real warnings."""
+    for code in ("INR", "USD", "EUR", "GBP", "SGD", "AED"):
+        adapted = razorpay_adapter.adapt_payment(
+            razorpay_test_payment(currency=code), home_country="IN",
+            balance_context=razorpay_adapter.BalanceContext(**LEDGER_BALANCES),
+        )
+        assert not any("minor-unit table" in w for w in adapted.warnings), code
+        assert adapted.transaction["amount"] == 1000.00, code
 
 
 def test_created_at_unix_seconds_becomes_occurred_at():
