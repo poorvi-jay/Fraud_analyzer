@@ -31,3 +31,6 @@ data/*.csv
 
 # Claude Code local session config
 .claude/
+
+# Razorpay API keys are read from .env / the environment, never committed.
+# The generated verification report is fine to commit; the keys are not.
