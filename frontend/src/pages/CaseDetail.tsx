@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import type { FormEvent } from "react";
 import { Link, useParams } from "react-router-dom";
-import { getTransaction, overrideReview } from "../api";
+import { caseReportUrl, getTransaction, overrideReview } from "../api";
 import { useAuth } from "../auth";
 import type { OverrideDecision, TransactionDetail } from "../types";
 
@@ -83,14 +83,19 @@ export default function CaseDetail() {
       <p>
         <Link to="/queue">&larr; back to queue</Link>
       </p>
-      <h2>
-        Case {txn.id.slice(0, 8)}
-        {txn.review_result && (
-          <span className={`badge badge-${txn.review_result.final_verdict}`} style={{ marginLeft: 12 }}>
-            {txn.review_result.final_verdict}
-          </span>
-        )}
-      </h2>
+      <div className="case-header">
+        <h2>
+          Case {txn.id.slice(0, 8)}
+          {txn.review_result && (
+            <span className={`badge badge-${txn.review_result.final_verdict}`} style={{ marginLeft: 12 }}>
+              {txn.review_result.final_verdict}
+            </span>
+          )}
+        </h2>
+        <a className="button-link" href={caseReportUrl(txn.id)} download={`case-${txn.id.slice(0, 8)}.pdf`}>
+          Export PDF
+        </a>
+      </div>
 
       <table className="kv">
         <tbody>

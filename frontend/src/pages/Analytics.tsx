@@ -1,13 +1,45 @@
 import { useEffect, useState } from "react";
-import { Bar, BarChart, CartesianGrid, Cell, Legend, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
-import { getAgentAgreementRate, getEvaluationSummary, getVerdictDistribution, getVerdictTrend } from "../api";
-import type { AgentAgreementRate, EvaluationSummary, VerdictDistributionRow, VerdictTrendRow } from "../types";
+import {
+  Bar,
+  BarChart,
+  CartesianGrid,
+  Cell,
+  Legend,
+  Line,
+  LineChart,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+} from "recharts";
+import {
+  getAgentAgreementRate,
+  getAgentFlagTrend,
+  getEvaluationSummary,
+  getOverrideOutcomes,
+  getVerdictDistribution,
+  getVerdictTrend,
+} from "../api";
+import type {
+  AgentAgreementRate,
+  AgentFlagTrendRow,
+  EvaluationSummary,
+  OverrideOutcomes,
+  VerdictDistributionRow,
+  VerdictTrendRow,
+} from "../types";
 
 function cssVar(name: string): string {
   return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
 }
 
 const VERDICT_LABELS: Record<string, string> = { allow: "Allow", escalate: "Escalate", block: "Block" };
+
+const AGENT_LABELS: Record<string, string> = {
+  anomaly_agent: "Anomaly (ML)",
+  context_agent: "Context (LLM)",
+  policy_agent: "Policy (rules)",
+};
 
 function pct(x: number): string {
   return `${(x * 100).toFixed(1)}%`;
@@ -17,15 +49,25 @@ export default function Analytics() {
   const [distribution, setDistribution] = useState<VerdictDistributionRow[] | null>(null);
   const [agreement, setAgreement] = useState<AgentAgreementRate | null>(null);
   const [trend, setTrend] = useState<VerdictTrendRow[] | null>(null);
+  const [overrides, setOverrides] = useState<OverrideOutcomes | null>(null);
+  const [flagTrend, setFlagTrend] = useState<AgentFlagTrendRow[] | null>(null);
   const [evaluation, setEvaluation] = useState<EvaluationSummary | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    Promise.all([getVerdictDistribution(), getAgentAgreementRate(), getVerdictTrend()])
-      .then(([d, a, t]) => {
+    Promise.all([
+      getVerdictDistribution(),
+      getAgentAgreementRate(),
+      getVerdictTrend(),
+      getOverrideOutcomes(),
+      getAgentFlagTrend(),
+    ])
+      .then(([d, a, t, o, f]) => {
         setDistribution(d);
         setAgreement(a);
         setTrend(t);
+        setOverrides(o);
+        setFlagTrend(f);
       })
       .catch((e) => setError(e.message));
     // Evaluation summary is a separate, optional fetch -- it 404s until
@@ -37,7 +79,7 @@ export default function Analytics() {
   }, []);
 
   if (error) return <p className="error">Failed to load analytics: {error}</p>;
-  if (!distribution || !agreement || !trend) return <p>Loading...</p>;
+  if (!distribution || !agreement || !trend || !overrides || !flagTrend) return <p>Loading...</p>;
 
   const colors = {
     allow: cssVar("--ink"),
@@ -136,6 +178,86 @@ export default function Analytics() {
             <Tooltip formatter={(value: number) => pct(value)} />
             <Bar dataKey="rate" name="Agreement rate" fill={colors.allow} />
           </BarChart>
+        </ResponsiveContainer>
+      </div>
+
+      <div className="chart-card">
+        <h3>Human review outcomes</h3>
+        <p className="subtle">
+          What reviewers did with the cases the coordinator escalated &mdash; the only ground-truth-adjacent
+          signal the live system produces. An <em>approve</em> means a human cleared the case, so the pipeline
+          would have been wrong to block it; a <em>reject</em> means the escalation was warranted. Treat this as
+          a proxy, not a label: only escalated cases are ever reviewed, so it says nothing about the allow and
+          block decisions no human saw. The labelled measurement is the held-out PaySim evaluation below.
+        </p>
+        <div className="stat-row">
+          <div className="stat-card">
+            <div className="label">Escalated cases</div>
+            <div className="value">{overrides.escalated_total}</div>
+          </div>
+          <div className="stat-card">
+            <div className="label">Reviewed by a human</div>
+            <div className="value">
+              {overrides.reviewed} <span className="subtle">({pct(overrides.review_rate)})</span>
+            </div>
+          </div>
+          <div className="stat-card">
+            <div className="label">Awaiting review</div>
+            <div className="value flagged">{overrides.pending}</div>
+          </div>
+          <div className="stat-card">
+            <div className="label">Cleared on review</div>
+            <div className="value">
+              {overrides.reviewed > 0 ? pct(overrides.approve_rate) : <span className="subtle">n/a</span>}
+            </div>
+          </div>
+        </div>
+        {overrides.reviewed > 0 ? (
+          <ResponsiveContainer width="100%" height={160}>
+            <BarChart
+              layout="vertical"
+              data={[
+                { label: "Approved (cleared)", count: overrides.decisions.approve },
+                { label: "Rejected (fraud confirmed)", count: overrides.decisions.reject },
+              ]}
+              margin={{ top: 8, right: 24, left: 24, bottom: 8 }}
+            >
+              <CartesianGrid stroke={colors.grid} horizontal={false} />
+              <XAxis type="number" allowDecimals={false} tick={{ fontSize: 12 }} />
+              <YAxis type="category" dataKey="label" width={180} tick={{ fontSize: 12 }} />
+              <Tooltip />
+              <Bar dataKey="count" name="Cases">
+                <Cell fill={colors.allow} />
+                <Cell fill={colors.block} />
+              </Bar>
+            </BarChart>
+          </ResponsiveContainer>
+        ) : (
+          <p className="subtle">
+            No escalated case has been reviewed yet, so there is nothing to chart. Sign in and override an
+            escalated case to populate this.
+          </p>
+        )}
+      </div>
+
+      <div className="chart-card">
+        <h3>Agent flag rate over time</h3>
+        <p className="subtle">
+          The share of each day's transactions each agent flagged. Rate rather than count, so a busy day
+          doesn't read as a riskier one. Divergence between the lines is the pipeline's premise made visible:
+          three agents looking at the same traffic and reaching different conclusions.
+        </p>
+        <ResponsiveContainer width="100%" height={240}>
+          <LineChart data={flagTrend} margin={{ top: 8, right: 16, left: 0, bottom: 8 }}>
+            <CartesianGrid stroke={colors.grid} vertical={false} />
+            <XAxis dataKey="date" tick={{ fontSize: 11 }} />
+            <YAxis domain={[0, 1]} tickFormatter={pct} tick={{ fontSize: 12 }} />
+            <Tooltip formatter={(value: number) => pct(value)} />
+            <Legend formatter={(v: string) => AGENT_LABELS[v] ?? v} />
+            <Line type="monotone" dataKey="anomaly_agent" stroke={colors.allow} dot={false} />
+            <Line type="monotone" dataKey="context_agent" stroke={colors.escalate} dot={false} />
+            <Line type="monotone" dataKey="policy_agent" stroke={colors.block} dot={false} />
+          </LineChart>
         </ResponsiveContainer>
       </div>
 

@@ -72,6 +72,25 @@ export interface VerdictTrendRow {
   block: number;
 }
 
+export interface OverrideOutcomes {
+  escalated_total: number;
+  reviewed: number;
+  pending: number;
+  review_rate: number;
+  total_overrides: number;
+  decisions: { approve: number; reject: number };
+  approve_rate: number;
+}
+
+/** Per-day flag rate for each agent. Agent keys are absent on days where
+ *  that agent produced no opinions, so read them defensively. */
+export interface AgentFlagTrendRow {
+  date: string;
+  anomaly_agent?: number;
+  context_agent?: number;
+  policy_agent?: number;
+}
+
 export interface InlineProfile {
   home_country: string;
   typical_transaction_amount: number;

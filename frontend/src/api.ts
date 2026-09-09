@@ -1,6 +1,8 @@
 import type {
   AgentAgreementRate,
+  AgentFlagTrendRow,
   EvaluationSummary,
+  OverrideOutcomes,
   OverrideDecision,
   ReviewResult,
   RazorpaySimulateRequest,
@@ -75,6 +77,22 @@ export function getVerdictTrend(): Promise<VerdictTrendRow[]> {
 
 export function getEvaluationSummary(): Promise<EvaluationSummary> {
   return request("/analytics/evaluation-summary");
+}
+
+export function getOverrideOutcomes(): Promise<OverrideOutcomes> {
+  return request("/analytics/override-outcomes");
+}
+
+export function getAgentFlagTrend(): Promise<AgentFlagTrendRow[]> {
+  return request("/analytics/agent-flag-trend");
+}
+
+/** URL of the server-rendered PDF case file. Returned as a URL rather than
+ *  fetched: the browser's own download handling gives a progress indicator
+ *  and a real filename from Content-Disposition, both of which we'd have to
+ *  reimplement badly to hand it a blob instead. */
+export function caseReportUrl(transactionId: string): string {
+  return `${API_BASE_URL}/transactions/${encodeURIComponent(transactionId)}/report.pdf`;
 }
 
 export function simulateTransaction(payload: SimulateRequest): Promise<SimulateResponse> {

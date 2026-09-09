@@ -317,6 +317,39 @@ button:disabled {
   text-decoration: underline;
 }
 
+/* An <a> that has to look like a button: the PDF export is a real link so
+   the browser handles the download (filename, progress) itself, rather than
+   a click handler that fetches a blob and reimplements that badly. */
+.button-link {
+  font-family: var(--mono);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-size: 12px;
+  padding: 8px 16px;
+  background: var(--ink);
+  color: var(--paper);
+  border: 1px solid var(--ink);
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.button-link:hover {
+  background: var(--paper);
+  color: var(--ink);
+}
+
+.case-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.case-header h2 {
+  margin-bottom: 0;
+}
+
 .login-page form,
 .override-form {
   display: flex;
