@@ -17,11 +17,13 @@ below — but the live public deployment's case queue is seeded from
 synthetic demo transactions regardless of which dataset the model was
 trained on. See PRD §4 for the full non-goals list.
 
-**Status: Phase 1 (MVP) and Phase 2 (reviewer auth, human override, analytics
-dashboard) both deployed and live.** Trained anomaly model, real (mockable)
-context agent, policy agent, coordinator, FastAPI backend, and a case queue /
-case detail / analytics / reviewer sign-in frontend all run end-to-end, both
-locally and live:
+**Status: feature-complete against the PRD.** Phase 1 (MVP), Phase 2
+(reviewer auth, human override, analytics dashboard) and all three Phase 3
+stretch items (PDF case export, compliance webhook stub, per-agent trend
+charts) are built, tested and deployed. Trained anomaly model, real
+(mockable) context agent, policy agent, coordinator, FastAPI backend, and a
+case queue / case detail / analytics / reviewer sign-in frontend all run
+end-to-end, both locally and live:
 
 - Frontend: https://fraud-analyzer-five.vercel.app
 - Backend API: https://fraudlens-api-2zmg.onrender.com (interactive docs at `/docs`)
@@ -203,6 +205,7 @@ python ml/seed_demo_queue.py
 cd frontend
 cp .env.example .env
 npm install
+npm test      # vitest, no backend needed
 npm run dev   # http://localhost:5173
 ```
 
@@ -221,6 +224,9 @@ See [`.env.example`](.env.example) for all backend settings. Notably:
   swap in the real database with no code changes.
 - `REVIEW_RATE_LIMIT` — rate-limits the public `POST /transactions/review`
   endpoint to control LLM API cost once a real provider is wired up.
+- `COMPLIANCE_WEBHOOK_URL` — where to POST a compliance notification on an
+  auto-block or a reviewer rejection. Empty by default: the notifier logs
+  the payload it would have sent and does nothing else.
 
 ## Phase 2: reviewer override & analytics
 
@@ -306,21 +312,94 @@ Supabase project of your own — no need to share the live one).
   ourselves. On a cold start there is none, and the context agent's
   profile-relative judgement is only as good as that store.
 
-## What's not done yet (stretch, per the PRD)
+## Case export, compliance webhook, and review analytics
 
-- Real LLM context agent in production — currently `LLM_PROVIDER=mock` on
-  the live deployment (no API key configured yet); the Anthropic-backed
-  path is implemented, just switching it on is pending a cost/quality
-  decision (see PRD open questions).
-- PDF export, compliance webhook stub (stretch, cut first per the PRD).
+Three things beyond the queue-and-verdict core, all shipped:
+
+- **PDF case export.** `GET /transactions/{id}/report.pdf` (and an *Export
+  PDF* button on any case) renders the full case file — inputs, all three
+  agent opinions, coordinator reasoning, every reviewer override — as a PDF,
+  server-side via `backend/app/reporting.py`. Server-side rather than from
+  the browser's print dialog so the artifact is reproducible from the API
+  alone. It reprints the demo-mode notice, because a PDF outlives the page
+  it came from and a verdict sheet with no provenance is exactly the kind of
+  thing that gets mistaken for a real one.
+- **Compliance webhook stub.** `backend/app/notifications.py` fires when the
+  pipeline auto-blocks a transaction or a reviewer rejects an escalated
+  case. It is genuinely a stub: with `COMPLIANCE_WEBHOOK_URL` unset (the
+  default, and what the live demo runs) it builds the payload, logs it, and
+  sends nothing. It is always called *after* the database commit and never
+  raises, so a webhook failure can't roll back a verdict.
+- **Human review analytics.** `GET /analytics/override-outcomes` aggregates
+  what reviewers actually did with escalated cases — the only
+  ground-truth-adjacent signal the live system produces. A reviewer clearing
+  a case is the closest live proxy for "the pipeline would have blocked
+  something legitimate", and both the API docstring and the UI say plainly
+  that it is a proxy and not a label: only escalated cases are ever
+  reviewed, so it says nothing about the allow and block decisions no human
+  saw. The labelled numbers stay in the offline PaySim evaluation above.
+
+## Tests and CI
+
+[`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs on every push
+and pull request:
+
+| Job | What it runs |
+|---|---|
+| Backend | `pip install -r requirements.txt`, then `pytest` (91 tests) |
+| Frontend | `npm ci`, `npm run lint`, `npx tsc -b`, `npm test` (18 tests), `npm run build` |
+
+```bash
+cd backend  && pytest        # agents, pipeline, API, adapter, analytics, PDF, webhook
+cd frontend && npm test      # analytics dashboard, case detail, override flow, API client
+```
+
+CI never has an API key and never needs one: the context agent's LLM path is
+tested against a stubbed client, so the contract (prompt contents, response
+parsing, the labelled fallback) is verified on every run with no network.
+The half that *does* need a live key is a script, run by hand:
+
+```bash
+cd backend
+LLM_PROVIDER=anthropic ANTHROPIC_API_KEY=sk-... python scripts/check_context_agent.py
+```
+
+It runs the PRD's scaffolding cases against the real provider, prints each
+judgment for a human to read, and fails if any case silently fell back to
+the mock heuristic. `GET /health` reports which provider is live on a
+running deployment, so the demo can't quietly claim to be LLM-backed while
+running the heuristic:
+
+```json
+{"status": "ok",
+ "context_agent": {"configured_provider": "mock", "active_provider": "mock",
+                   "model": null, "reason": "LLM_PROVIDER=mock -- ..."}}
+```
+
+## Still open
+
+- **The live deployment runs `LLM_PROVIDER=mock` on purpose.** The
+  Anthropic-backed path is implemented and tested, and the provider question
+  is settled (PRD §11: Anthropic, smallest model in the family). What is
+  deliberately not done is pointing a public, unauthenticated demo endpoint
+  at a paid API — `REVIEW_RATE_LIMIT` exists for exactly that reason, but
+  the honest state is that the cost exposure hasn't been taken. Set
+  `LLM_PROVIDER=anthropic` and `ANTHROPIC_API_KEY` to switch it on; `/health`
+  will say so.
+- **No accuracy claim for the Razorpay path**, and there won't be one
+  without labelled Razorpay data — see Limitations.
 
 ## Repo layout
 
 ```
-backend/    FastAPI app, agents, persistence (SQLAlchemy), tests
+backend/    FastAPI app, agents, adapters, PDF reporting, compliance
+            notifications, persistence (SQLAlchemy), tests, and scripts/
+            (live-provider checks that CI can't run)
 ml/         data generation, threshold calibration/diagnostics, model training,
             baseline evaluation, demo seeding
-frontend/   React + Vite case queue / case detail / analytics / reviewer sign-in UI
+frontend/   React + Vite case queue / case detail / analytics / playground /
+            reviewer sign-in UI, with vitest tests alongside the components
 supabase/   Postgres schema for a real Supabase project
-docs/       PRD.md, ARCHITECTURE.md
+docs/       PRD.md, ARCHITECTURE.md, RAZORPAY_ADAPTER.md
+.github/    CI (backend pytest; frontend lint, typecheck, test, build)
 ```

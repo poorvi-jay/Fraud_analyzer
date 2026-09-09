@@ -131,6 +131,7 @@ erDiagram
     string reviewer_id FK
     string decision
     string note
+    datetime reviewed_at
   }
 ```
 
@@ -146,17 +147,20 @@ transactions have no ground truth.
 
 | Method | Path | Purpose | Auth |
 |---|---|---|---|
-| GET | `/health` | Liveness check | None |
+| GET | `/health` | Liveness check, plus which context-agent provider is actually live | None |
 | POST | `/transactions/review` | Run the full pipeline on a transaction, persist the result | None (public demo) |
 | POST | `/transactions/simulate` | Run the pipeline without persisting - playground | None |
 | POST | `/transactions/razorpay/simulate` | Same, from a Razorpay Payment object via `adapters/razorpay_adapter` | None |
 | GET | `/transactions/example-users` | Seeded profiles for the playground picker | None |
 | GET | `/transactions` | List the case queue, filterable by verdict | None |
 | GET | `/transactions/{id}` | Case detail - all agent opinions + verdict | None |
+| GET | `/transactions/{id}/report.pdf` | The same case file as a downloadable PDF | None |
 | POST | `/reviews/{id}/override` | Human reviewer decision on an escalated case | Reviewer JWT required |
 | GET | `/analytics/verdict-distribution` | Counts by verdict | None |
 | GET | `/analytics/agent-agreement-rate` | How often agents agree vs. conflict | None |
 | GET | `/analytics/verdict-trend` | Verdict volume over time | None |
+| GET | `/analytics/agent-flag-trend` | Per-agent flag rate by day | None |
+| GET | `/analytics/override-outcomes` | What human reviewers did with escalated cases | None |
 | GET | `/analytics/evaluation-summary` | Baseline vs. multi-agent comparison stats | None |
 
 Queue/detail/analytics endpoints stay unauthenticated deliberately -
@@ -170,8 +174,18 @@ the action that writes a human judgment (`override`) is gated.
 2. Supabase returns a JWT to the frontend.
 3. The frontend sends that JWT in the `Authorization` header on the
    override request only.
-4. FastAPI verifies the JWT against Supabase's public key before
-   writing to `human_reviews`.
+4. FastAPI verifies the token by calling Supabase's Auth API
+   (`auth.get_user`, see `backend/app/auth.py`) before writing to
+   `human_reviews`.
+
+Step 4 is deliberately *not* a local JWT decode against a signing key,
+which is what this document originally specified. Verifying through
+Supabase's own Auth API means there is no shared secret to keep in sync
+between the Supabase project and the backend env, and no assumption
+baked in about which signing algorithm the Supabase project uses - a
+local decode has to be told, and breaks silently if that ever changes
+or if a key is rotated. The cost is one network call per override
+request, on the single lowest-traffic endpoint in the system.
 
 No custom auth logic needed - this is entirely Supabase Auth's default
 flow, chosen specifically because it avoids building session

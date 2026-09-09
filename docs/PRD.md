@@ -91,13 +91,34 @@ this project): recruiters and interviewers evaluating the build.
 |---|---|---|
 | Human review override | Reviewer approves/rejects an escalated case with a note | Decision + note persisted, visible on the case detail view, linked to the original review |
 | Reviewer auth | Login gate for the override action only | Queue and analytics remain publicly viewable (demo purpose); override requires a signed-in reviewer via Supabase Auth |
-| Analytics dashboard | Aggregate charts over all reviewed transactions | Verdict distribution, agent agreement/disagreement rate, false positive trend over time |
+| Analytics dashboard | Aggregate charts over all reviewed transactions | Verdict distribution, agent agreement/disagreement rate, false positive trend over time (see note) |
+
+Note on "false positive trend over time": as written this is not
+computable from live demo traffic, which has no ground-truth label to
+call anything false. It ships as three separate honest measurements
+rather than one dishonest one: verdict volume by day, human review
+outcomes (`/analytics/override-outcomes` - a reviewer clearing an
+escalated case is the closest live proxy for a would-be false positive,
+labelled as a proxy in the UI), and the actual labelled false-positive
+rate from the held-out PaySim evaluation
+(`/analytics/evaluation-summary`).
 
 ### 7.3 Stretch - cut first if time is short
 
-- Exportable PDF report for a single case
-- Stubbed "notify compliance team" webhook
-- Historical fraud-rate trend charts beyond what's in 7.2
+All three shipped after 7.1 and 7.2 were complete, so none were cut:
+
+| Feature | Status | Where |
+|---|---|---|
+| Exportable PDF report for a single case | Shipped | `GET /transactions/{id}/report.pdf`, rendered by `backend/app/reporting.py`; "Export PDF" on the case detail page |
+| Stubbed "notify compliance team" webhook | Shipped | `backend/app/notifications.py`, fired on auto-block and on a reviewer rejection. Genuinely a stub: with no `COMPLIANCE_WEBHOOK_URL` set (the default, including the live demo) it logs the payload and sends nothing |
+| Historical trend charts beyond 7.2 | Shipped | `GET /analytics/agent-flag-trend` - per-day flag rate per agent - charted on the analytics page |
+
+Note on the third: "fraud-rate trend" as originally worded isn't
+measurable on live demo data, which carries no `is_fraud` label. Per-agent
+flag rate over time is the honest version of the same question - it shows
+how the three agents' judgments diverge across the traffic they actually
+saw. The labelled measurement stays where the labels are: the offline
+held-out PaySim evaluation reported by `/analytics/evaluation-summary`.
 
 ### 7.4 Explicitly out of scope
 
@@ -156,10 +177,31 @@ days on the same sequencing.
   sufficient for demo and evaluation purposes; this is not claimed to
   generalize to real-world fraud patterns.
 
-## 11. Open questions
+## 11. Open questions - resolved
 
-- Which LLM provider to standardize on for the context agent (cost vs.
-  quality tradeoff not yet evaluated).
-- Whether the reviewer login is a single shared demo account or
-  supports creating new reviewer accounts (affects Supabase Auth setup
-  complexity slightly).
+**Which LLM provider to standardize on for the context agent?**
+Anthropic, on the smallest model in the family (`LLM_MODEL` defaults to
+`claude-haiku-4-5-20251001`). The task is a short, structured
+plausibility judgment returning a two-field JSON object, not open-ended
+reasoning, so the cost/quality tradeoff that made this an open question
+resolves toward the cheap end: a larger model buys little on a task
+this constrained, and cost matters on a public demo endpoint. The
+decision is also cheap to revisit - the provider boundary is one
+function with a fixed signature in `context_agent.py`, and the
+model id is an env var.
+
+Note this is a decision about *which* provider, not about running one
+live: the deployed demo still defaults to `LLM_PROVIDER=mock` (see
+Non-goals - a public, unauthenticated endpoint calling a paid API is a
+cost risk taken deliberately, not by default). `GET /health` reports
+which is actually running, so the deployment can never quietly claim
+more than it does.
+
+**Single shared demo reviewer account, or self-serve reviewer signup?**
+A single account, created by hand in the Supabase dashboard. Self-serve
+signup would mean either an open door on a public demo or an approval
+flow to build, and per Non-goals this is explicitly not multi-tenant -
+there is one demo environment, so one reviewer identity is the honest
+representation of it. `human_reviews.reviewer_id` still stores the real
+Supabase user id rather than a constant, so nothing about the schema
+assumes a single reviewer if that ever changes.
