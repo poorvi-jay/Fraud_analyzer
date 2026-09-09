@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session, joinedload
 
+from app import notifications
 from app.auth import require_reviewer
 from app.db import get_db
 from app.models import HumanReview, ReviewResult
@@ -35,4 +36,15 @@ def override_review(
     db.add(human_review)
     db.commit()
     db.refresh(review_result)
+
+    # Post-commit, and only for a rejection -- a reviewer confirming fraud is
+    # what a compliance team would need to hear about. See app/notifications.py.
+    if payload.decision == "reject":
+        notifications.notify_override_rejected(
+            review_result_id=review_result.id,
+            transaction_id=review_result.transaction_id,
+            reviewer_id=reviewer_id,
+            note=payload.note,
+        )
+
     return review_result

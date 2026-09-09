@@ -1,7 +1,13 @@
 def test_health(client):
     resp = client.get("/health")
     assert resp.status_code == 200
-    assert resp.json() == {"status": "ok"}
+    body = resp.json()
+    assert body["status"] == "ok"
+    # The whole point of exposing this is that a deployment claiming to be
+    # LLM-backed can be checked without trusting the README, so assert the
+    # fields a caller would read -- not just that the key exists.
+    assert body["context_agent"]["configured_provider"] == "mock"
+    assert body["context_agent"]["active_provider"] == "mock"
 
 
 def test_review_unknown_user_returns_404(client):

@@ -5,6 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 
+from app.agents import context_agent
 from app.config import settings
 from app.db import init_db
 from app.rate_limit import limiter
@@ -14,6 +15,7 @@ from app.routers import analytics, health, reviews, transactions
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_db()
+    context_agent.log_provider_status()
     yield
 
 

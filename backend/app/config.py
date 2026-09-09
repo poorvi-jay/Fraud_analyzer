@@ -29,5 +29,12 @@ class Settings(BaseSettings):
     supabase_url: str = ""
     supabase_anon_key: str = ""
 
+    # Stretch (PRD 7.3): where to POST a compliance notification when a
+    # transaction is auto-blocked or a reviewer rejects an escalated case.
+    # Unset (the default) means the notifier logs the payload it *would* have
+    # sent and reports itself as not configured -- see app/notifications.py.
+    compliance_webhook_url: str = ""
+    compliance_webhook_timeout_seconds: float = 5.0
+
 
 settings = Settings()

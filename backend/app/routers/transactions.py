@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from sqlalchemy import select
 from sqlalchemy.orm import Session, joinedload
 
@@ -13,6 +13,7 @@ from app.agents.pipeline import (
 from app.db import get_db
 from app.models import ReviewResult, Transaction, UserProfile
 from app.rate_limit import limiter
+from app.reporting import build_case_report
 from app.config import settings
 from app.schemas import (
     ExampleUserOut,
@@ -140,8 +141,7 @@ def list_transactions(
     ]
 
 
-@router.get("/{transaction_id}", response_model=TransactionDetail)
-def get_transaction(transaction_id: str, db: Session = Depends(get_db)):
+def _load_case(transaction_id: str, db: Session) -> Transaction:
     txn = db.get(
         Transaction,
         transaction_id,
@@ -153,3 +153,28 @@ def get_transaction(transaction_id: str, db: Session = Depends(get_db)):
     if txn is None:
         raise HTTPException(status_code=404, detail=f"No transaction with id={transaction_id!r}")
     return txn
+
+
+@router.get("/{transaction_id}", response_model=TransactionDetail)
+def get_transaction(transaction_id: str, db: Session = Depends(get_db)):
+    return _load_case(transaction_id, db)
+
+
+@router.get(
+    "/{transaction_id}/report.pdf",
+    response_class=Response,
+    responses={200: {"content": {"application/pdf": {}}, "description": "The case file as a PDF"}},
+)
+def get_transaction_report(transaction_id: str, db: Session = Depends(get_db)):
+    """Exportable single-case report (PRD 7.3). Public like the rest of the
+    read path -- it contains nothing the case detail page doesn't already
+    show, and gating it would break the "click through without a login" demo
+    premise for the one artifact a visitor might actually want to keep.
+    """
+    txn = _load_case(transaction_id, db)
+    pdf = build_case_report(txn)
+    return Response(
+        content=pdf,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="case-{txn.id[:8]}.pdf"'},
+    )

@@ -3,6 +3,7 @@ from datetime import datetime, timedelta, timezone
 
 from sqlalchemy.orm import Session
 
+from app import notifications
 from app.adapters import razorpay_adapter
 from app.agents import anomaly_agent, context_agent, coordinator_agent, policy_agent
 from app.agents.base import AgentOpinion
@@ -105,6 +106,18 @@ def run_pipeline(db: Session, payload: TransactionReviewRequest) -> Transaction:
     except Exception:
         db.rollback()
         raise
+
+    # After the commit, never inside the try: a compliance-notification
+    # failure must not roll back a verdict that has already been decided and
+    # persisted. notify_* never raises (see app/notifications.py), so this is
+    # belt and braces -- but the ordering is the part that matters.
+    if verdict.final_verdict == "block":
+        notifications.notify_transaction_blocked(
+            transaction_id=txn.id,
+            user_id=txn.user_id,
+            amount=txn.amount,
+            coordinator_reasoning=verdict.coordinator_reasoning,
+        )
 
     db.refresh(txn)
     return txn

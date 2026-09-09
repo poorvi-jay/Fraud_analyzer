@@ -55,6 +55,74 @@ def test_agent_agreement_rate_shape_and_delta(client, sample_profile):
         assert 0.0 <= pair["rate"] <= 1.0
 
 
+def test_override_outcomes_shape_before_any_review(client):
+    body = client.get("/analytics/override-outcomes").json()
+    assert set(body) == {
+        "escalated_total",
+        "reviewed",
+        "pending",
+        "review_rate",
+        "total_overrides",
+        "decisions",
+        "approve_rate",
+    }
+    assert body["escalated_total"] == body["reviewed"] + body["pending"]
+    assert 0.0 <= body["review_rate"] <= 1.0
+
+
+def test_override_outcomes_counts_a_reviewed_case(client, escalated_case, mock_reviewer):
+    _, review_result = escalated_case
+    before = client.get("/analytics/override-outcomes").json()
+
+    resp = client.post(
+        f"/reviews/{review_result.id}/override",
+        json={"decision": "approve", "note": "Traveller, verified by phone."},
+    )
+    assert resp.status_code == 200
+
+    after = client.get("/analytics/override-outcomes").json()
+    assert after["reviewed"] == before["reviewed"] + 1
+    assert after["decisions"]["approve"] == before["decisions"]["approve"] + 1
+    assert after["pending"] == before["pending"] - 1
+
+
+def test_re_reviewing_a_case_replaces_its_standing_decision(client, escalated_case, mock_reviewer):
+    """A case reviewed twice is still one reviewed case, and the later
+    decision is the one that counts -- otherwise a corrected review would be
+    double-counted and skew the approve rate.
+    """
+    _, review_result = escalated_case
+    before = client.get("/analytics/override-outcomes").json()
+
+    client.post(
+        f"/reviews/{review_result.id}/override", json={"decision": "approve", "note": "looks fine"}
+    )
+    client.post(
+        f"/reviews/{review_result.id}/override",
+        json={"decision": "reject", "note": "second look -- account is a mule"},
+    )
+
+    after = client.get("/analytics/override-outcomes").json()
+    assert after["reviewed"] == before["reviewed"] + 1
+    assert after["total_overrides"] == before["total_overrides"] + 2
+    assert after["decisions"]["reject"] == before["decisions"]["reject"] + 1
+    assert after["decisions"]["approve"] == before["decisions"]["approve"]
+
+
+def test_agent_flag_trend_reports_a_rate_per_agent_per_day(client, sample_profile):
+    _create_blocked_transaction(client, sample_profile)
+    resp = client.get("/analytics/agent-flag-trend")
+    assert resp.status_code == 200
+
+    day = next(row for row in resp.json() if row["date"] == "2024-06-15")
+    assert set(day) == {"date", "anomaly_agent", "context_agent", "policy_agent"}
+    for agent in ("anomaly_agent", "context_agent", "policy_agent"):
+        assert 0.0 <= day[agent] <= 1.0
+    # The seeded case is a policy-flagged mule pattern, so policy_agent's
+    # flag rate for that day cannot be zero.
+    assert day["policy_agent"] > 0.0
+
+
 def test_verdict_trend_groups_by_date(client, sample_profile):
     _create_blocked_transaction(client, sample_profile)
     resp = client.get("/analytics/verdict-trend")
