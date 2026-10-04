@@ -18,14 +18,26 @@ synthetic demo transactions regardless of which dataset the model was
 trained on. See PRD §4 for the full non-goals list.
 
 **Status: Phase 1 (MVP) and Phase 2 (reviewer auth, human override, analytics
-dashboard) both deployed and live.** Trained anomaly model, real (mockable)
-context agent, policy agent, coordinator, FastAPI backend, and a case queue /
-case detail / analytics / reviewer sign-in frontend all run end-to-end, both
-locally and live:
+dashboard) both deployed and live**, plus the post-PRD Razorpay ingestion
+path (PRD §7.5). Trained anomaly model, real (mockable) context agent, policy
+agent, coordinator, FastAPI backend, and a case queue / case detail /
+analytics / reviewer sign-in frontend all run end-to-end, both locally and
+live:
 
 - Frontend: https://fraud-analyzer-five.vercel.app
 - Backend API: https://fraudlens-api-2zmg.onrender.com (interactive docs at `/docs`)
 - Database: Supabase Postgres
+
+> **If the demo appears dead, give it a minute, then read this.** Both the
+> API (Render free tier) and the database (Supabase free tier) sleep when
+> idle. A first request after idle takes ~30s while Render wakes — that's
+> normal. What is *not* normal is no response at all: the backend opens its
+> database connection at import time, so if Supabase has been paused for
+> inactivity, uvicorn exits and every route including `/health` hangs with
+> no reply. Unpause the project in the Supabase dashboard and Render's
+> restart loop recovers on its own within ~5 minutes; no redeploy needed,
+> and seeded data survives the pause. This is a free-tier tradeoff, not a
+> bug in the app.
 
 See [Phase 2 setup](#phase-2-reviewer-override--analytics) for how reviewer
 auth is wired up if you're standing up your own deployment.
@@ -210,17 +222,64 @@ npm run dev   # http://localhost:5173
 
 See [`.env.example`](.env.example) for all backend settings. Notably:
 
-- `LLM_PROVIDER=mock` (default) — the context agent uses a deterministic
-  profile-comparison heuristic, clearly labeled `[mock heuristic]` in its
-  reasoning, so the demo never overstates what's actually LLM-backed. Set
-  `LLM_PROVIDER=anthropic` and `ANTHROPIC_API_KEY` for real LLM reasoning
-  (provider-agnostic by design — adding another provider is one function
-  with the same signature, see `backend/app/agents/context_agent.py`).
+- `LLM_PROVIDER` — `mock` (default), `openai`, or `anthropic`. The mock is a
+  deterministic profile-comparison heuristic, clearly labeled
+  `[mock heuristic]` in its reasoning, so the demo never overstates what's
+  actually LLM-backed. `openai` (GPT-5.6 Luna) needs `OPENAI_API_KEY`;
+  `anthropic` needs `ANTHROPIC_API_KEY`. Provider-agnostic by design —
+  adding another is one function with the same signature, see
+  `backend/app/agents/context_agent.py`. **Keys are server-side only**: the
+  browser only ever receives `VITE_*` vars, and no route returns a key.
+- `LLM_MONTHLY_BUDGET_USD` / `LLM_DAILY_BUDGET_USD` — see
+  [Cost controls](#cost-controls) below. These are not optional decoration;
+  they are what bounds the bill.
 - `DATABASE_URL` — defaults to a local SQLite file. Point it at a Supabase
   Postgres connection string (after running `supabase/schema.sql` there) to
   swap in the real database with no code changes.
-- `REVIEW_RATE_LIMIT` — rate-limits the public `POST /transactions/review`
-  endpoint to control LLM API cost once a real provider is wired up.
+- `REVIEW_RATE_LIMIT` — rate-limits the public scoring endpoints. Note this
+  is **per IP** (slowapi's default key), so it shapes bursts but is not a
+  global ceiling; the budget caps below are what actually bound spend.
+
+## Cost controls
+
+The context agent is the only component that calls an LLM: **one call per
+transaction scored**, ~315 tokens (~260 in, ~55 out), about $0.00012 at
+GPT-5.6 Luna's $0.20/$1.20 per 1M. Reading the queue, a case, or the
+analytics costs nothing — agent reasoning is persisted when the verdict is
+produced, not regenerated on view.
+
+Three guards, because a shared key makes an unbounded demo everyone else's
+problem too:
+
+1. **Persistent spend caps.** `llm_daily_spend` (one row per UTC day) backs
+   a daily and a monthly cap. It lives in the database on purpose: an
+   in-memory counter resets on every Render cold start, so it could log
+   spend but never cap it. Checks happen before each call, count the call
+   about to be made, and **fail closed** — an unreadable ledger means no
+   call. When a cap is hit the agent serves the mock, labeled
+   `[LLM budget reached: ...]`, so the demo degrades visibly instead of
+   dying. Defaults assume a $5/month key shared across four projects:
+   $1.00/month on Render, $0.25 locally (separate ledgers — local dev uses
+   SQLite and cannot see the deployed one).
+2. **`ml/evaluate_baseline.py` forces the mock** whatever `LLM_PROVIDER`
+   says. One row is one call and the default sample is 30,000, so the
+   documented command would otherwise cost ~$3.54, and `--sample-size 0`
+   against real PaySim ~$188. Live evaluation needs `--allow-llm`, is
+   capped by `--max-live-calls` (default 200), is checked against the
+   remaining budget, and asks for confirmation. There is also a
+   methodological reason: a live LLM makes the reported numbers
+   non-reproducible, so the report records which provider produced it and
+   says so explicitly if a run ended up mixed.
+3. **Misconfiguration fails loudly.** A missing or invalid key, an unknown
+   provider, or a model with no pricing entry raises rather than falling
+   back — returned as HTTP 503 naming the problem. Only *transient*
+   failures (timeout, 429, 5xx, unparseable output) fall back to the mock,
+   labeled inline. A silent fallback would mean serving mock verdicts while
+   believing the demo was LLM-backed.
+
+Set an account-level spend limit in your provider's console as well. That
+limit is org-wide, so it protects the wallet but not the other projects
+sharing the key — which is what the per-project caps above are for.
 
 ## Phase 2: reviewer override & analytics
 
@@ -271,11 +330,14 @@ Supabase project of your own — no need to share the live one).
   the context agent's per-user personalization is real for the small
   fraction of users who do have multiple transactions, and a
   population-level norm for everyone else.
-- **The context agent defaults to a mock heuristic**, not a live LLM call —
-  no API key is configured in this environment. The heuristic is designed
-  to be a reasonable stand-in (see `_run_mock` in `context_agent.py`) and
-  the Anthropic-backed path is implemented and ready, just untested against
-  a live key.
+- **The context agent defaults to a mock heuristic**, not a live LLM call.
+  The heuristic is designed to be a reasonable stand-in (see `_run_mock` in
+  `context_agent.py`). The OpenAI path (GPT-5.6 Luna) has been verified
+  end-to-end against a live key with `scripts/smoke_llm.py` — call shape,
+  response parsing, token accounting and the spend ledger all confirmed on
+  one real call. The **Anthropic path remains implemented but unexercised**.
+  Every verdict in the committed reports and in the seeded demo queue still
+  comes from the mock, and the deployed backend still runs it.
 - **Policy rules are illustrative**, not derived from actual regulatory
   requirements (see PRD non-goals). Thresholds are calibrated to whichever
   dataset is currently loaded (see above), not to real-world regulatory
@@ -306,13 +368,41 @@ Supabase project of your own — no need to share the live one).
   ourselves. On a cold start there is none, and the context agent's
   profile-relative judgement is only as good as that store.
 
-## What's not done yet (stretch, per the PRD)
+## What's not done yet
 
-- Real LLM context agent in production — currently `LLM_PROVIDER=mock` on
-  the live deployment (no API key configured yet); the Anthropic-backed
-  path is implemented, just switching it on is pending a cost/quality
-  decision (see PRD open questions).
-- PDF export, compliance webhook stub (stretch, cut first per the PRD).
+**One committed MVP item is still unmet, and it is not a stretch item.**
+PRD §7.1 lists "real context agent — replace placeholder with an actual LLM
+call" as must-ship for Phase 1.
+
+The provider question (PRD §11) is now settled: **GPT-5.6 Luna via the
+OpenAI API**, chosen on cost — about 4.5x cheaper per call than the
+Haiku 4.5 alternative, which matters on a key shared across four projects.
+The client, token accounting, spend caps and failure handling are all
+written and unit-tested.
+
+The path is verified locally: `scripts/smoke_llm.py` scores one real
+transaction against a live key and checks the call shape, the parsed
+response, billed tokens against the estimate, and the ledger write. It
+passes.
+
+What is **not** done: the deployed backend still runs `LLM_PROVIDER=mock`,
+so the acceptance criterion is met locally and unmet in production. Nothing
+overstates itself in the meantime — the mock is labelled `[mock heuristic]`
+wherever its reasoning appears — but the live demo a visitor clicks is
+still heuristic-backed, and this line stays until that changes.
+
+Also outstanding:
+
+- **The Razorpay adapter is doc-verified, not API-verified** — see
+  [`scripts/verify_razorpay_schema.py`](#scriptsverify_razorpay_schemapy)
+  above, which exists to close this and has not been run.
+- **Analytics reports verdict volume over time, not false-positive rate over
+  time**, which PRD §7.2 originally specified. This is a deliberate
+  narrowing — the live queue has no ground-truth labels, so the rate is not
+  computable there; see the scope correction in PRD §7.2.
+
+Genuinely cut, per PRD §7.3: PDF export, compliance webhook stub, trend
+charts beyond the above.
 
 ## Repo layout
 
@@ -321,6 +411,28 @@ backend/    FastAPI app, agents, persistence (SQLAlchemy), tests
 ml/         data generation, threshold calibration/diagnostics, model training,
             baseline evaluation, demo seeding
 frontend/   React + Vite case queue / case detail / analytics / reviewer sign-in UI
+scripts/    one-off verification tooling (not imported by the app)
 supabase/   Postgres schema for a real Supabase project
-docs/       PRD.md, ARCHITECTURE.md
+docs/       PRD.md, ARCHITECTURE.md, RAZORPAY_ADAPTER.md
+render.yaml Blueprint documenting the backend's Render deployment
 ```
+
+### `scripts/verify_razorpay_schema.py`
+
+The Razorpay adapter's field mapping was written from Razorpay's published
+Payment entity schema. This script checks those assumptions against real
+test-mode API responses instead, and reports field by field where docs and
+reality diverge. One authenticated GET, no writes.
+
+```bash
+export RAZORPAY_KEY_ID=rzp_test_xxxxxxxx
+export RAZORPAY_KEY_SECRET=xxxxxxxx
+python scripts/verify_razorpay_schema.py
+```
+
+Live (`rzp_live_`) keys are refused with no override flag — a live key would
+pull real customers' contact details into a local file. The report records
+only whether identity fields are *present*, never their values.
+
+**This has not been run yet**, so the adapter remains doc-verified, not
+API-verified. See [Limitations](#limitations).

@@ -1,0 +1,100 @@
+# Render Blueprint for the backend API.
+#
+# This file documents a deployment that already exists and was originally
+# configured by hand in the Render dashboard (service `fraudlens-api`,
+# srv-d9ai10ecjfls739fa9eg). It is checked in so the deployment is
+# reproducible from the repo instead of living only as dashboard state --
+# which is how a multi-day outage went unnoticed once already.
+#
+# The values below mirror the live service as of 2026-09-20. Applying this
+# Blueprint to the EXISTING service is not something to do casually: Render
+# treats several of these fields as immutable after creation, and env vars
+# marked `sync: false` are never written by a Blueprint apply, so a careless
+# apply can only remove configuration, not restore it. Treat this as
+# documentation plus a recipe for standing up a fresh copy.
+#
+# Standing up a fresh copy needs, after the first deploy:
+#   1. DATABASE_URL     -- Supabase pooler connection string (see below)
+#   2. SUPABASE_URL     -- same project, for reviewer auth
+#   3. SUPABASE_ANON_KEY
+#   4. FRONTEND_ORIGIN  -- the Vercel URL, for CORS
+#   5. python ml/seed_demo_queue.py, pointed at that DATABASE_URL
+
+services:
+  - type: web
+    name: fraudlens-api
+    runtime: python
+    plan: free
+    region: ohio
+    branch: main
+    # Repo root, NOT backend/. The app is started with --app-dir backend, but
+    # app/routers/analytics.py reads ml/reports/baseline_comparison.json from
+    # the repo root, so ml/ has to be present in the deployed tree.
+    rootDir: .
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app.main:app --app-dir backend --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    autoDeploy: true
+
+    envVars:
+      # Supabase Postgres pooler URL. Secret, and set in the dashboard.
+      #
+      # NOTE: on the free Supabase tier the project is paused after about a
+      # week idle. The backend opens its connection at import time, so a
+      # paused database is not a degraded demo -- uvicorn exits and every
+      # route, /health included, times out with no response at all. Render
+      # retries roughly every 5 minutes and recovers on its own once the
+      # database answers again; no redeploy is needed.
+      - key: DATABASE_URL
+        sync: false
+
+      # Phase 2 reviewer auth. Same Supabase project as DATABASE_URL, and the
+      # same anon key the frontend uses.
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_ANON_KEY
+        sync: false
+
+      # CORS. Must match the deployed frontend origin exactly, no trailing slash.
+      - key: FRONTEND_ORIGIN
+        value: https://fraud-analyzer-five.vercel.app
+
+      # Context agent provider: mock | openai | anthropic. "mock" uses a
+      # deterministic heuristic and needs no API key, and its reasoning is
+      # labelled "[mock heuristic]" so the demo never overstates what is
+      # LLM-backed. "openai" requires OPENAI_API_KEY.
+      #
+      # The key is server-side only -- it lives here, never in the Vercel
+      # frontend env, and no route returns it.
+      - key: LLM_PROVIDER
+        value: openai
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      # Must be a key in MODEL_PRICING (backend/app/llm_usage.py). No date
+      # suffix -- a suffixed id is a different string to the provider.
+      - key: LLM_MODEL
+        value: gpt-5.6-luna
+
+      # Per-project spend caps (USD), enforced from the persistent
+      # llm_daily_spend ledger so a cold start can't reset them. The OpenAI
+      # console limit is org-wide and shared with other projects; these are
+      # what stop this demo draining their share.
+      #
+      # $1.00, not the full $1.25 share: local dev runs against SQLite, which
+      # is a SEPARATE ledger that this one can't see. Local .env files cap at
+      # $0.25/month so the two together stay within $1.25.
+      - key: LLM_MONTHLY_BUDGET_USD
+        value: "1.00"
+      - key: LLM_DAILY_BUDGET_USD
+        value: "0.15"
+
+      # Anomaly agent decision threshold. Tuned in
+      # ml/reports/baseline_comparison.md -- change it there first, not here.
+      - key: ANOMALY_HIGH_THRESHOLD
+        value: "0.5"
+
+      # Caps LLM spend on the public review endpoint once a real provider is on.
+      - key: REVIEW_RATE_LIMIT
+        value: 20/minute

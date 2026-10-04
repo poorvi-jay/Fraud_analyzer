@@ -37,14 +37,44 @@ def main():
     parser.add_argument("--min-escalate", type=int, default=3, help="Guaranteed minimum escalate cases in the queue.")
     parser.add_argument("--min-block", type=int, default=3, help="Guaranteed minimum block cases in the queue.")
     parser.add_argument("--max-search", type=int, default=1000, help="Search budget for the guaranteed-mix pass.")
+    parser.add_argument("--yes", action="store_true", help="Skip the live-LLM cost confirmation.")
     args = parser.parse_args()
 
+    from app.agents.context_agent import LLMConfigurationError
     from app.agents.pipeline import run_pipeline
+    from app.config import settings
     from app.db import SessionLocal, init_db
+    from app.llm_budget import flush, remaining
+    from app.llm_usage import estimate_cost_usd, tracker
     from app.models import UserProfile
     from app.schemas import TransactionReviewRequest
 
-    init_db()
+    init_db()  # before the budget read below: creates llm_daily_spend if missing
+
+    # Unlike ml/evaluate_baseline.py, seeding is NOT forced to the mock: the
+    # seeded rows are what visitors actually read in the case queue, so a
+    # demo seeded with the mock shows "[mock heuristic]" on every case. But
+    # each row is one LLM call and the guaranteed-mix pass can search up to
+    # --max-search candidates, so show the ceiling against the remaining
+    # budget and confirm before spending. The per-call cap in context_agent
+    # still applies: once the budget is hit, remaining rows are seeded with
+    # the labelled mock rather than billed.
+    if settings.llm_provider != "mock":
+        worst_case = args.n_transactions + args.max_search
+        est = estimate_cost_usd(settings.llm_model, worst_case)
+        left_today, left_month = remaining()
+        print(f"Seeding with LIVE {settings.llm_provider} ({settings.llm_model}): "
+              f"{args.n_transactions} rows, up to {worst_case:,} LLM calls worst case "
+              f"(~${est:.2f}). Typical runs use far fewer.")
+        print(f"Budget left: ${left_today:.4f} today, ${left_month:.4f} this month.")
+        if est > min(left_today, left_month):
+            print("WARNING: the worst case exceeds the remaining budget. Rows seeded after "
+                  "the cap is hit will use the labelled mock heuristic, so the demo queue "
+                  "would be a mix of LLM and mock reasoning.")
+        if not args.yes and input("Type 'yes' to proceed: ").strip().lower() != "yes":
+            print("Aborted. Nothing was called, nothing was billed.")
+            sys.exit(1)
+
     db = SessionLocal()
 
     profiles = pd.read_csv(DATA_DIR / "user_profiles.csv").set_index("user_id")
@@ -101,6 +131,8 @@ def main():
             verdict = seed_transaction(row, now - timedelta(hours=len(primary) - i))
             verdict_counts[verdict] = verdict_counts.get(verdict, 0) + 1
             ok += 1
+        except LLMConfigurationError:
+            raise  # every remaining row would fail identically -- stop now
         except Exception as exc:
             print(f"  failed for {row.user_id}: {exc}")
 
@@ -124,6 +156,11 @@ def main():
         ensure_profile(row.user_id)
         try:
             verdict = seed_transaction(row, now - timedelta(minutes=searched))
+        except LLMConfigurationError:
+            # Not a bad row -- the provider is misconfigured and every
+            # remaining candidate would fail identically. Don't burn the
+            # search budget pretending otherwise.
+            raise
         except Exception:
             continue
         if verdict in found and found[verdict] < targets[verdict]:
@@ -132,6 +169,12 @@ def main():
     for verdict, target in targets.items():
         status = "ok" if found[verdict] >= target else "SHORT -- ran out of search budget"
         print(f"Guaranteed-mix search: found {found[verdict]}/{target} {verdict} cases ({status}, searched {searched}).")
+
+    flush()  # land every ledger write before reporting
+    usage = tracker.totals
+    if usage.calls:
+        print(f"LLM usage: {usage.calls:,} calls, {usage.input_tokens:,} input + "
+              f"{usage.output_tokens:,} output tokens, ${usage.cost_usd:.4f}.")
 
     db.close()
 

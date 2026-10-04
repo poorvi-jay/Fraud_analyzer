@@ -77,6 +77,19 @@ begin
     end if;
 end $$;
 
+-- Persistent LLM spend ledger (backend/app/llm_budget.py), one row per UTC
+-- day. Enforces the per-project daily/monthly caps across restarts -- the
+-- in-memory tracker resets on every Render cold start. The backend also
+-- creates this via SQLAlchemy create_all on startup, but create_all does NOT
+-- enable RLS, which is why it's declared here too: see below.
+create table if not exists llm_daily_spend (
+    day date primary key,
+    calls integer not null default 0,
+    input_tokens integer not null default 0,
+    output_tokens integer not null default 0,
+    cost_usd double precision not null default 0
+);
+
 -- Row Level Security: queue/detail/analytics stay publicly readable
 -- (demo purpose, matches the unauthenticated GET endpoints in
 -- docs/ARCHITECTURE.md); writes only ever happen through the backend
@@ -86,6 +99,13 @@ alter table transactions enable row level security;
 alter table agent_opinions enable row level security;
 alter table review_results enable row level security;
 alter table human_reviews enable row level security;
+-- RLS on with NO policies: invisible and unwritable through Supabase's REST
+-- API. This one is a security control, not just hygiene. The anon key ships
+-- in the frontend bundle, so without RLS anyone could PATCH this table --
+-- zero out today's spend to bypass the cap, or inflate it to switch the LLM
+-- off for the rest of the month. The backend connects as the table owner
+-- and bypasses RLS, so this costs it nothing.
+alter table llm_daily_spend enable row level security;
 
 -- drop-then-create (rather than a bare `create policy`) keeps this
 -- re-runnable: Postgres has no `create policy if not exists`.

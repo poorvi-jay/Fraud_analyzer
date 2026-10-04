@@ -1,14 +1,19 @@
+import logging
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 
+from app.agents.context_agent import LLMConfigurationError
 from app.config import settings
 from app.db import init_db
 from app.rate_limit import limiter
 from app.routers import analytics, health, reviews, transactions
+
+logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
@@ -25,6 +30,25 @@ app = FastAPI(
 
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
+
+@app.exception_handler(LLMConfigurationError)
+async def llm_configuration_error_handler(request: Request, exc: LLMConfigurationError):
+    """A misconfigured LLM provider is an operator error, not a client error.
+
+    Returned as 503 with the reason, rather than a bare 500 or -- worse -- a
+    200 carrying a mock verdict the caller would have no way to distinguish
+    from a real one. The message names the misconfiguration but never the
+    key itself.
+    """
+    logger.error("LLM misconfiguration on %s: %s", request.url.path, exc)
+    return JSONResponse(
+        status_code=503,
+        content={
+            "detail": str(exc),
+            "hint": "Set LLM_PROVIDER=mock to serve the deterministic heuristic instead.",
+        },
+    )
 
 app.add_middleware(
     CORSMiddleware,

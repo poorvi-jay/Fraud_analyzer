@@ -91,7 +91,26 @@ this project): recruiters and interviewers evaluating the build.
 |---|---|---|
 | Human review override | Reviewer approves/rejects an escalated case with a note | Decision + note persisted, visible on the case detail view, linked to the original review |
 | Reviewer auth | Login gate for the override action only | Queue and analytics remain publicly viewable (demo purpose); override requires a signed-in reviewer via Supabase Auth |
-| Analytics dashboard | Aggregate charts over all reviewed transactions | Verdict distribution, agent agreement/disagreement rate, false positive trend over time |
+| Analytics dashboard | Aggregate charts over all reviewed transactions | Verdict distribution, agent agreement/disagreement rate, ~~false positive trend over time~~ → verdict volume over time (see scope correction below) |
+
+**Scope correction — "false positive trend over time" was not buildable as
+specified.** A false positive rate requires ground truth: you can only call a
+`block` wrong if you know the transaction was legitimate. The live case queue
+has no labels. It is seeded from PaySim rows, but what is persisted is the
+pipeline's verdict, not the source row's `isFraud` — and even if it were, a
+"false positive rate over time" computed over replayed historical rows measures
+the dataset's ordering, not the system's calibration drifting.
+
+So `/analytics/verdict-trend` reports **verdict volume over time** instead, and
+the honest false-positive number lives where it can be computed properly:
+`/analytics/evaluation-summary`, served from
+`ml/reports/baseline_comparison.json`, measured against the held-out labelled
+test split. That is the number quoted in the README.
+
+This is a deliberate narrowing, not an oversight. The alternative — plotting a
+"false positive rate" the data cannot support — would have been the single most
+misleading chart in the project. User story 4's "false positive rate over time"
+is unmet, and stays unmet, for that reason.
 
 ### 7.3 Stretch - cut first if time is short
 
@@ -107,6 +126,23 @@ this project): recruiters and interviewers evaluating the build.
   *designing for* - the human_reviews table is structured so this is
   possible later - but not implementing it)
 - Any form of monetization
+
+### 7.5 Added after this PRD was written: Razorpay ingestion
+
+`POST /transactions/razorpay/simulate` and the `/razorpay` frontend screen
+were built after §7 was frozen and were never scoped here. Recording it so
+this document does not read as the complete feature set:
+
+- The adapter maps a Razorpay test-mode Payment object onto the same four
+  agents, with no agent modified.
+- It is verified against Razorpay's *published schema*, not against live API
+  responses. `scripts/verify_razorpay_schema.py` exists to close that gap and
+  has not been run.
+- No accuracy claim is made for this path. Every number in §8 and in the
+  README is measured on PaySim; no labelled Razorpay fraud data was used at
+  any point.
+
+See `docs/RAZORPAY_ADAPTER.md` for what does and does not survive the mapping.
 
 ## 8. Success metrics
 
@@ -158,8 +194,28 @@ days on the same sequencing.
 
 ## 11. Open questions
 
-- Which LLM provider to standardize on for the context agent (cost vs.
-  quality tradeoff not yet evaluated).
+- ~~Which LLM provider to standardize on for the context agent (cost vs.
+  quality tradeoff not yet evaluated).~~ **Resolved: OpenAI GPT-5.6 Luna.**
+
+  Decided on cost, because the quality side was never actually evaluated
+  and this document should not pretend otherwise. Measured from the real
+  prompt `context_agent` builds (~260 input, ~55 output tokens), one scored
+  transaction costs ~$0.00012 on Luna ($0.20/$1.20 per 1M) against
+  ~$0.00054 on Claude Haiku 4.5 ($1.00/$5.00) — roughly 4.5x. In absolute
+  terms that is ~40 cents a month at realistic demo volume, which would not
+  decide anything on its own; it matters because the key is shared across
+  four projects with a $5/month ceiling between them.
+
+  Two consequences worth recording. First, the abuse ceiling scales with
+  the same factor, and that is where the difference is real money. Second,
+  because provider choice here is a config value rather than a code change,
+  the "provider-agnostic" claim in §5 is now demonstrated rather than
+  asserted — both clients exist behind one signature.
+
+  Per-project spend caps were added alongside this (see the README's cost
+  controls section). The provider decision and the guardrails around it
+  arrived together on purpose: a shared key makes an uncapped demo
+  everyone else's problem.
 - Whether the reviewer login is a single shared demo account or
   supports creating new reviewer accounts (affects Supabase Auth setup
   complexity slightly).

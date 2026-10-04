@@ -14,9 +14,27 @@ class Settings(BaseSettings):
 
     database_url: str = DEFAULT_SQLITE_URL
 
-    llm_provider: str = "mock"  # "mock" | "anthropic"
+    # "mock" | "openai" | "anthropic". Keys are server-side only -- nothing
+    # here is ever sent to the frontend (the browser only gets VITE_* vars,
+    # see frontend/.env.example), and no route echoes them back.
+    llm_provider: str = "mock"
+    openai_api_key: str = ""
     anthropic_api_key: str = ""
-    llm_model: str = "claude-haiku-4-5-20251001"
+    # Must be a model id present in llm_usage.MODEL_PRICING, or the cost
+    # guards can't price it. No date suffix -- a suffixed id is a different
+    # string to the provider and 404s.
+    llm_model: str = "gpt-5.6-luna"
+
+    # Hard spend caps for THIS project, enforced from the persistent
+    # llm_daily_spend ledger (UTC days/months) so they survive restarts.
+    # The OpenAI console limit is org-wide and shared across projects, so
+    # it can't stop this demo draining the budget the others depend on.
+    # Default: a $5/month key split four ways -> $1.25. The daily cap stops
+    # one bad day from eating the month; $0.15 still fits a worst-case
+    # demo re-seed (~$0.13). When either is hit, the context agent falls
+    # back to the mock heuristic with an explicit budget label.
+    llm_monthly_budget_usd: float = 1.25
+    llm_daily_budget_usd: float = 0.15
 
     anomaly_high_threshold: float = 0.5
 

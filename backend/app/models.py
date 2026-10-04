@@ -8,7 +8,7 @@ the equivalent DDL there).
 import uuid
 from datetime import datetime, date
 
-from sqlalchemy import Boolean, Date, DateTime, Float, ForeignKey, String
+from sqlalchemy import Boolean, Date, DateTime, Float, ForeignKey, Integer, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db import Base
@@ -86,3 +86,21 @@ class HumanReview(Base):
     reviewed_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
     review_result: Mapped["ReviewResult"] = relationship(back_populates="human_reviews")
+
+
+class LLMDailySpend(Base):
+    """Persistent ledger of live LLM spend, one row per UTC day.
+
+    This is what enforces the budget. The in-memory tracker in llm_usage.py
+    resets whenever the process restarts -- on Render's free tier that is
+    every cold start -- so it can log usage but cannot cap it. Monthly spend
+    is the SUM over the month's rows.
+    """
+
+    __tablename__ = "llm_daily_spend"
+
+    day: Mapped[date] = mapped_column(Date, primary_key=True)  # UTC
+    calls: Mapped[int] = mapped_column(Integer, default=0)
+    input_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    output_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    cost_usd: Mapped[float] = mapped_column(Float, default=0.0)
