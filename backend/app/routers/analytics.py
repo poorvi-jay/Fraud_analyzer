@@ -33,6 +33,23 @@ def evaluation_summary():
     return json.loads(REPORT_PATH.read_text())
 
 
+@router.get("/llm-usage")
+def llm_usage():
+    """Live LLM spend for today and the month, against the configured caps.
+
+    Public, like the rest of the analytics endpoints. It returns only
+    aggregate counts and dollar totals -- never the key, and nothing about
+    individual transactions. The one tradeoff worth naming: it tells a
+    reader how much budget is left, which is a hint to anyone trying to
+    exhaust it. That is accepted here because the caps bound the damage to
+    a known dollar figure either way, and because spend you cannot observe
+    is spend you cannot notice going wrong.
+    """
+    from app.llm_budget import usage_snapshot
+
+    return usage_snapshot()
+
+
 @router.get("/verdict-distribution")
 def verdict_distribution(db: Session = Depends(get_db)):
     stmt = select(ReviewResult.final_verdict, func.count()).group_by(ReviewResult.final_verdict)

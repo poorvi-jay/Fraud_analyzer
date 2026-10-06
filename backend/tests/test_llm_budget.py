@@ -308,6 +308,37 @@ class TestCaps:
         assert "mock heuristic" in opinion.reasoning
 
 
+class TestUsageEndpoint:
+    def test_reports_spend_against_the_caps(self, client, monkeypatch, live_openai, clean_ledger, db_session):
+        from app.models import LLMDailySpend
+
+        monkeypatch.setattr(settings, "llm_daily_budget_usd", 0.15)
+        monkeypatch.setattr(settings, "llm_monthly_budget_usd", 1.00)
+        db_session.add(LLMDailySpend(day=_utc_today(), calls=2, input_tokens=400,
+                                     output_tokens=100, cost_usd=0.02))
+        db_session.commit()
+
+        body = client.get("/analytics/llm-usage").json()
+
+        assert body["provider"] == "openai"
+        assert body["model"] == MODEL
+        assert body["today"]["calls"] == 2
+        assert body["today"]["cost_usd"] == pytest.approx(0.02)
+        assert body["today"]["remaining_usd"] == pytest.approx(0.13)
+        assert body["today"]["exhausted"] is False
+        assert body["month_to_date"]["remaining_usd"] == pytest.approx(0.98)
+
+    def test_empty_ledger_reports_zeroes_not_an_error(self, client, clean_ledger):
+        body = client.get("/analytics/llm-usage").json()
+        assert body["today"]["calls"] == 0
+        assert body["today"]["cost_usd"] == 0.0
+
+    def test_never_leaks_the_key(self, client, monkeypatch, live_openai, clean_ledger):
+        raw = client.get("/analytics/llm-usage").text
+        assert settings.openai_api_key not in raw
+        assert "api_key" not in raw
+
+
 class TestApiSurface:
     def test_misconfiguration_returns_503_not_500(self, client, monkeypatch, sample_profile):
         """An operator error should be a clear 503, never a 200 carrying a

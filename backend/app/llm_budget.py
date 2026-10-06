@@ -72,6 +72,53 @@ def spend_snapshot() -> tuple[float, float]:
     return float(day_cost), float(month_cost)
 
 
+def usage_snapshot() -> dict:
+    """Full ledger totals for today and this month, with the caps applied.
+
+    Exists so spend is observable from outside the process. The caps were
+    enforceable but invisible before this: short of querying the database
+    by hand there was no way to see what had been spent.
+    """
+    from app.db import SessionLocal
+    from app.models import LLMDailySpend
+
+    today = _today()
+    month_start, month_end = _month_bounds(today)
+    totals = (
+        func.coalesce(func.sum(LLMDailySpend.calls), 0),
+        func.coalesce(func.sum(LLMDailySpend.input_tokens), 0),
+        func.coalesce(func.sum(LLMDailySpend.output_tokens), 0),
+        func.coalesce(func.sum(LLMDailySpend.cost_usd), 0.0),
+    )
+    with SessionLocal() as db:
+        day_row = db.execute(
+            select(*totals).where(LLMDailySpend.day == today)
+        ).one()
+        month_row = db.execute(
+            select(*totals).where(LLMDailySpend.day >= month_start, LLMDailySpend.day < month_end)
+        ).one()
+
+    def _period(row, cap):
+        calls, tokens_in, tokens_out, cost = row
+        return {
+            "calls": int(calls),
+            "input_tokens": int(tokens_in),
+            "output_tokens": int(tokens_out),
+            "cost_usd": round(float(cost), 6),
+            "budget_usd": cap,
+            "remaining_usd": round(max(cap - float(cost), 0.0), 6),
+            "exhausted": float(cost) >= cap,
+        }
+
+    return {
+        "provider": settings.llm_provider,
+        "model": settings.llm_model if settings.llm_provider != "mock" else None,
+        "as_of_utc": today.isoformat(),
+        "today": _period(day_row, settings.llm_daily_budget_usd),
+        "month_to_date": _period(month_row, settings.llm_monthly_budget_usd),
+    }
+
+
 def remaining() -> tuple[float, float]:
     """-> (USD left today, USD left this month), floored at zero."""
     day_cost, month_cost = spend_snapshot()

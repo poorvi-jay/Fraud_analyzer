@@ -15,6 +15,18 @@ from app.routers import analytics, health, reviews, transactions
 
 logger = logging.getLogger(__name__)
 
+# Uvicorn configures handlers for its own loggers only, so application
+# loggers propagate to a bare root logger -- and with no root handler
+# Python's fallback emits WARNING and above, silently dropping every INFO
+# record. That meant the per-call "llm_call ... cost_usd=..." lines never
+# reached the Render log stream, which is the only window into live spend.
+# basicConfig is a no-op when the root logger already has handlers, so this
+# is safe under any host that does configure logging itself.
+logging.basicConfig(
+    level=settings.log_level.upper(),
+    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+)
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
