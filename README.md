@@ -44,6 +44,28 @@ auth is wired up if you're standing up your own deployment.
 
 ## Result: does the multi-agent pipeline actually help?
 
+> **These numbers describe the mock context agent, not what is deployed.**
+> Every figure below was measured with `LLM_PROVIDER=mock`. Production now
+> runs GPT-5.6 Luna, and the real LLM is a markedly stricter judge of
+> plausibility — in a 60-transaction seeding sample it escalated **33 of 60
+> (55%)** against the 0.71% escalation rate reported here. Since escalation
+> is defined as anomaly/context disagreement, a stricter context agent
+> disagrees far more often, and the false-positive and escalation rates
+> below would all move substantially.
+>
+> They have not been re-measured, and within this project's budget they
+> cannot be. One evaluation run over the 30,000-row sample is ~$5.13 at
+> GPT-5.6 Luna's rates — more than the entire shared monthly budget — and
+> the affordable alternative (a 200-call cap) covers ~0.26 expected fraud
+> cases on data with a 0.13% fraud rate, which measures nothing. So the
+> LLM-backed configuration is **unmeasured**, deliberately and for a stated
+> reason, rather than quietly assumed to match the mock.
+>
+> What the mock-measured numbers still support: the coordinator's design,
+> the preserved anomaly/context input split, and the baseline comparison
+> method. What they do not support is any claim about the escalation or
+> false-positive rate of the system a visitor interacts with today.
+
 Measured on a held-out test split the anomaly model never trained on
 (see [`ml/reports/baseline_comparison.md`](ml/reports/baseline_comparison.md)
 for the full writeup, regenerate with `python ml/evaluate_baseline.py`),
@@ -336,8 +358,10 @@ Supabase project of your own — no need to share the live one).
   end-to-end against a live key with `scripts/smoke_llm.py` — call shape,
   response parsing, token accounting and the spend ledger all confirmed on
   one real call. The **Anthropic path remains implemented but unexercised**.
-  Every verdict in the committed reports and in the seeded demo queue still
-  comes from the mock, and the deployed backend still runs it.
+  Production now runs the OpenAI path. **Every verdict in the committed
+  reports still comes from the mock**, though, so the reported metrics and
+  the deployed behaviour are measurements of two different configurations —
+  see the note under [Result](#result-does-the-multi-agent-pipeline-actually-help).
 - **Policy rules are illustrative**, not derived from actual regulatory
   requirements (see PRD non-goals). Thresholds are calibrated to whichever
   dataset is currently loaded (see above), not to real-world regulatory
@@ -385,11 +409,20 @@ transaction against a live key and checks the call shape, the parsed
 response, billed tokens against the estimate, and the ledger write. It
 passes.
 
-What is **not** done: the deployed backend still runs `LLM_PROVIDER=mock`,
-so the acceptance criterion is met locally and unmet in production. Nothing
-overstates itself in the meantime — the mock is labelled `[mock heuristic]`
-wherever its reasoning appears — but the live demo a visitor clicks is
-still heuristic-backed, and this line stays until that changes.
+**This item is now met.** The deployed backend runs `LLM_PROVIDER=openai`
+with GPT-5.6 Luna, verified in production: a scored transaction returns real
+LLM reasoning, and `/analytics/llm-usage` shows the calls and cost recorded
+in the spend ledger.
+
+What turning it on revealed, and what is still open: the live context agent
+escalates far more aggressively than the mock it replaced (55% of a
+60-transaction sample versus the 0.71% in the committed report), so **the
+project's headline metrics no longer describe the deployed system** and
+cannot be re-measured inside the budget. That is documented under
+[Result](#result-does-the-multi-agent-pipeline-actually-help) rather than
+smoothed over. Whether 55% escalation is *correct* behaviour — a genuinely
+stricter judge — or the LLM being miscalibrated against this dataset is
+itself unexamined, and would be the first thing to look at next.
 
 Also outstanding:
 

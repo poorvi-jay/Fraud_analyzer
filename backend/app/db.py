@@ -3,8 +3,28 @@ from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
 from app.config import settings
 
-connect_args = {"check_same_thread": False} if settings.database_url.startswith("sqlite") else {}
-engine = create_engine(settings.database_url, connect_args=connect_args)
+# timeout: SQLite's busy handler is not fair, so a writer competing against a
+# sustained stream of other writes can be starved. The spend ledger is written
+# from a background thread while run_pipeline holds the write lock, and at the
+# 5s default every write during a seed run was starved out and dropped. 30s is
+# long enough to outlast a batch job's bursts; llm_budget also retries and
+# never discards an unwritten amount.
+connect_args = (
+    {"check_same_thread": False, "timeout": 30.0}
+    if settings.database_url.startswith("sqlite")
+    else {}
+)
+engine_kwargs = {}
+if not settings.database_url.startswith("sqlite"):
+    # Supabase fronts Postgres with a connection pooler that drops idle or
+    # long-lived connections, which surfaces as "server closed the connection
+    # unexpectedly" mid-run. pool_pre_ping tests a pooled connection before
+    # handing it out and transparently replaces a dead one; pool_recycle
+    # retires connections before the pooler decides to. Without these, a long
+    # batch job (ml/seed_demo_queue.py) reliably dies partway through.
+    engine_kwargs = {"pool_pre_ping": True, "pool_recycle": 300}
+
+engine = create_engine(settings.database_url, connect_args=connect_args, **engine_kwargs)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 

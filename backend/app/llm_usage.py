@@ -23,13 +23,18 @@ MODEL_PRICING: dict[str, tuple[float, float]] = {
     "claude-haiku-4-5": (1.00, 5.00),
 }
 
-# Measured against a representative prompt built by context_agent from a
-# real PaySim row (725 characters -> ~260 input tokens; the response is a
-# two-field JSON object). Used ONLY for pre-flight estimates, before any
-# call has been made. Actual billed usage is always read back from the
-# provider response -- never estimated after the fact.
-EST_INPUT_TOKENS_PER_CALL = 260
-EST_OUTPUT_TOKENS_PER_CALL = 55
+# Used ONLY for pre-flight estimates, before any call has been made. Actual
+# billed usage is always read back from the provider response -- never
+# estimated after the fact, and the spend caps are enforced on billed usage,
+# so an inaccurate figure here misleads a warning but never breaks a cap.
+#
+# Calibrated against 9 real GPT-5.6 Luna calls: 210 input / 107 output on
+# average. The first estimate put output at 55, derived from a single
+# smoke-test response, and was half the truth -- the model writes fuller
+# reasoning than one sample suggested. Both numbers are rounded up from the
+# measurement, so estimates err toward over-stating cost.
+EST_INPUT_TOKENS_PER_CALL = 230
+EST_OUTPUT_TOKENS_PER_CALL = 115
 
 
 class UnknownModelPricingError(KeyError):

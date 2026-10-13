@@ -20,6 +20,8 @@ Guarantees and their limits:
   * Days and months are UTC.
 """
 import logging
+import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, timezone
 
@@ -27,7 +29,7 @@ from sqlalchemy import func, select, update
 from sqlalchemy.exc import IntegrityError
 
 from app.config import settings
-from app.llm_usage import estimate_cost_usd
+from app.llm_usage import UsageTotals, estimate_cost_usd
 
 logger = logging.getLogger(__name__)
 
@@ -135,6 +137,13 @@ def check_budget(model: str, n_calls: int = 1) -> None:
     except Exception as exc:
         raise LLMBudgetExceeded(f"could not read the spend ledger ({exc}); failing closed") from exc
 
+    # Spend billed but not yet written counts too. Without this, a batch job
+    # whose ledger writes are lagging would keep passing the check on a stale
+    # total and blow straight through the cap.
+    unwritten = pending_cost()
+    day_cost += unwritten
+    month_cost += unwritten
+
     next_cost = estimate_cost_usd(model, n_calls)
     if day_cost + next_cost > settings.llm_daily_budget_usd:
         raise LLMBudgetExceeded(
@@ -146,15 +155,46 @@ def check_budget(model: str, n_calls: int = 1) -> None:
         )
 
 
-def _write(day: date, input_tokens: int, output_tokens: int, cost: float) -> None:
+WRITE_ATTEMPTS = 4
+RETRY_BACKOFF_SECONDS = 0.5
+
+# Spend that has been billed but not yet written to the ledger. Held here so
+# two things stay true: a transient write failure never loses the amount, and
+# check_budget counts it immediately -- an unwritten dollar is still spent.
+_pending_lock = threading.Lock()
+_pending = UsageTotals()
+
+
+def _add_pending(calls: int, input_tokens: int, output_tokens: int, cost: float) -> None:
+    with _pending_lock:
+        _pending.calls += calls
+        _pending.input_tokens += input_tokens
+        _pending.output_tokens += output_tokens
+        _pending.cost_usd += cost
+
+
+def pending_cost() -> float:
+    with _pending_lock:
+        return _pending.cost_usd
+
+
+def reset_pending() -> None:
+    """Discard unwritten spend. Only for tests -- in a running process this
+    would lose real spend that the cap is counting on."""
+    with _pending_lock:
+        _pending.calls = _pending.input_tokens = _pending.output_tokens = 0
+        _pending.cost_usd = 0.0
+
+
+def _write_batch(day: date, batch: UsageTotals) -> None:
     from app.db import SessionLocal
     from app.models import LLMDailySpend
 
     increment = update(LLMDailySpend).where(LLMDailySpend.day == day).values(
-        calls=LLMDailySpend.calls + 1,
-        input_tokens=LLMDailySpend.input_tokens + input_tokens,
-        output_tokens=LLMDailySpend.output_tokens + output_tokens,
-        cost_usd=LLMDailySpend.cost_usd + cost,
+        calls=LLMDailySpend.calls + batch.calls,
+        input_tokens=LLMDailySpend.input_tokens + batch.input_tokens,
+        output_tokens=LLMDailySpend.output_tokens + batch.output_tokens,
+        cost_usd=LLMDailySpend.cost_usd + batch.cost_usd,
     )
     # Increment in SQL, not read-modify-write in Python, so a second process
     # writing the same ledger (a local seed run against the production
@@ -163,8 +203,8 @@ def _write(day: date, input_tokens: int, output_tokens: int, cost: float) -> Non
         if db.execute(increment).rowcount:
             db.commit()
             return
-        db.add(LLMDailySpend(day=day, calls=1, input_tokens=input_tokens,
-                             output_tokens=output_tokens, cost_usd=cost))
+        db.add(LLMDailySpend(day=day, calls=batch.calls, input_tokens=batch.input_tokens,
+                             output_tokens=batch.output_tokens, cost_usd=batch.cost_usd))
         try:
             db.commit()
         except IntegrityError:
@@ -175,20 +215,52 @@ def _write(day: date, input_tokens: int, output_tokens: int, cost: float) -> Non
             db.commit()
 
 
-def _log_failure(future) -> None:
-    exc = future.exception()
-    if exc is not None:
-        # Losing a write undercounts spend, which weakens the cap. Loud on
-        # purpose -- this should be investigated, not ignored.
-        logger.error("llm_daily_spend write FAILED, cap may undercount: %s", exc)
+def _drain() -> None:
+    """Write everything pending as ONE row update, retrying on contention.
+
+    Coalescing matters as much as retrying: a batch job generates a call
+    every second or two, and one write attempt each is what let SQLite starve
+    them. Draining the accumulated total means far fewer attempts, each
+    carrying more, so a single success catches the ledger up completely.
+    """
+    with _pending_lock:
+        if _pending.calls == 0:
+            return
+        batch = UsageTotals(_pending.calls, _pending.input_tokens,
+                            _pending.output_tokens, _pending.cost_usd)
+        _pending.calls = _pending.input_tokens = _pending.output_tokens = 0
+        _pending.cost_usd = 0.0
+
+    day = _today()
+    for attempt in range(1, WRITE_ATTEMPTS + 1):
+        try:
+            _write_batch(day, batch)
+            return
+        except Exception as exc:
+            if attempt == WRITE_ATTEMPTS:
+                # Put it back rather than dropping it: it stays counted
+                # against the cap via pending_cost(), and the next drain
+                # will try again. Spend is never silently discarded.
+                _add_pending(batch.calls, batch.input_tokens, batch.output_tokens, batch.cost_usd)
+                logger.error(
+                    "llm_daily_spend write failed after %d attempts (%s); %d call(s) "
+                    "worth $%.6f stay pending and still count against the cap",
+                    WRITE_ATTEMPTS, exc, batch.calls, batch.cost_usd,
+                )
+                return
+            logger.warning("llm_daily_spend write contended (attempt %d/%d): %s",
+                           attempt, WRITE_ATTEMPTS, exc)
+            time.sleep(RETRY_BACKOFF_SECONDS * attempt)
 
 
 def record_spend(input_tokens: int, output_tokens: int, cost: float) -> None:
-    """Queue a ledger write for one completed call. Returns immediately."""
-    _writer.submit(_write, _today(), input_tokens, output_tokens, cost).add_done_callback(_log_failure)
+    """Account for one completed call. Returns immediately; the ledger write
+    happens on the writer thread."""
+    _add_pending(1, input_tokens, output_tokens, cost)
+    _writer.submit(_drain)
 
 
 def flush() -> None:
-    """Block until queued ledger writes have landed. For scripts that report
+    """Block until pending spend has been written. For scripts that report
     ledger totals at the end of a run."""
-    _writer.submit(lambda: None).result()
+    _writer.submit(_drain).result()

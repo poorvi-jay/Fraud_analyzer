@@ -125,16 +125,25 @@ def main():
     ok = 0
     verdict_counts = {"allow": 0, "escalate": 0, "block": 0}
     for i, row in enumerate(primary.itertuples(index=False)):
-        if ensure_profile(row.user_id):
-            seeded_profiles += 1
         try:
+            # ensure_profile belongs inside the try: it issues the first
+            # statement of each iteration, so it is where a dropped
+            # connection surfaces. Outside, one drop ended the whole run.
+            if ensure_profile(row.user_id):
+                seeded_profiles += 1
             verdict = seed_transaction(row, now - timedelta(hours=len(primary) - i))
             verdict_counts[verdict] = verdict_counts.get(verdict, 0) + 1
             ok += 1
         except LLMConfigurationError:
             raise  # every remaining row would fail identically -- stop now
         except Exception as exc:
-            print(f"  failed for {row.user_id}: {exc}")
+            # Roll back before continuing. A failed statement leaves the
+            # session in a state where every later one raises
+            # PendingRollbackError, so without this a single transient error
+            # (Supabase's pooler dropping the connection, say) doesn't skip
+            # one row -- it kills the rest of the run.
+            db.rollback()
+            print(f"  failed for {row.user_id}: {str(exc).splitlines()[0]}")
 
     print(f"Seeded {seeded_profiles} new user profiles.")
     print(f"Reviewed {ok}/{len(primary)} demo transactions (random sample): {verdict_counts}")
@@ -153,8 +162,8 @@ def main():
         if searched >= args.max_search:
             break
         searched += 1
-        ensure_profile(row.user_id)
         try:
+            ensure_profile(row.user_id)  # inside the try, as above
             verdict = seed_transaction(row, now - timedelta(minutes=searched))
         except LLMConfigurationError:
             # Not a bad row -- the provider is misconfigured and every
@@ -162,6 +171,7 @@ def main():
             # search budget pretending otherwise.
             raise
         except Exception:
+            db.rollback()  # same reason as the primary loop above
             continue
         if verdict in found and found[verdict] < targets[verdict]:
             found[verdict] += 1

@@ -16,8 +16,17 @@ import pytest
 from app.agents import context_agent
 from app.agents.context_agent import LLMConfigurationError
 from app.config import settings
-from app.llm_budget import LLMBudgetExceeded, check_budget, flush, remaining
+from app.llm_budget import (
+    LLMBudgetExceeded,
+    check_budget,
+    flush,
+    pending_cost,
+    remaining,
+    reset_pending,
+)
 from app.llm_usage import (
+    EST_INPUT_TOKENS_PER_CALL,
+    EST_OUTPUT_TOKENS_PER_CALL,
     UnknownModelPricingError,
     cost_usd,
     estimate_cost_usd,
@@ -73,9 +82,11 @@ def clean_ledger(db_session):
 
     _clear()
     tracker.reset()
+    reset_pending()
     yield
     _clear()
     tracker.reset()
+    reset_pending()
 
 
 @pytest.fixture
@@ -115,8 +126,18 @@ class TestPricing:
         # 1M input + 1M output at Luna's $0.20 / $1.20.
         assert cost_usd(MODEL, 1_000_000, 1_000_000) == pytest.approx(1.40)
 
-    def test_per_call_estimate_is_a_fraction_of_a_cent(self):
-        assert estimate_cost_usd(MODEL, 1) == pytest.approx(0.000118, abs=1e-6)
+    def test_per_call_estimate_matches_the_calibrated_constants(self):
+        """Derived from the constants rather than hardcoded, so recalibrating
+        them against real usage doesn't fail this test -- only a change that
+        breaks the arithmetic should."""
+        expected = cost_usd(MODEL, EST_INPUT_TOKENS_PER_CALL, EST_OUTPUT_TOKENS_PER_CALL)
+        assert estimate_cost_usd(MODEL, 1) == pytest.approx(expected)
+
+    def test_per_call_estimate_stays_a_fraction_of_a_cent(self):
+        """A sanity band, not a precise figure. Catches a constant or a price
+        being updated by an order of magnitude -- which would quietly make
+        every pre-flight cost warning meaningless."""
+        assert 0.00005 < estimate_cost_usd(MODEL, 1) < 0.001
 
     def test_estimate_scales_linearly(self):
         assert estimate_cost_usd(MODEL, 1000) == pytest.approx(estimate_cost_usd(MODEL, 1) * 1000)
@@ -360,3 +381,89 @@ class TestApiSurface:
         body = response.json()
         assert "no API key" in body["detail"]
         assert "LLM_PROVIDER=mock" in body["hint"]
+
+
+class TestWriteContention:
+    """The seed run starved every ledger write out and dropped all 148 of
+    them, so spend went unrecorded and the cap could not fire. These pin the
+    properties that fixed it."""
+
+    def test_unwritten_spend_counts_against_the_cap(self, monkeypatch, live_openai, clean_ledger):
+        """The important one. If a lagging write meant spend went uncounted,
+        a batch job would sail past the cap on a stale total."""
+        import app.llm_budget as budget
+
+        monkeypatch.setattr(settings, "llm_daily_budget_usd", 0.01)
+        # Writes fail, so this stays pending rather than reaching the ledger.
+        monkeypatch.setattr(budget, "_write_batch", lambda *a: (_ for _ in ()).throw(RuntimeError("locked")))
+        monkeypatch.setattr(budget, "WRITE_ATTEMPTS", 1)
+        monkeypatch.setattr(budget, "RETRY_BACKOFF_SECONDS", 0)
+
+        budget.record_spend(100_000, 100_000, 0.02)  # over the cap on its own
+        flush()
+
+        assert pending_cost() == pytest.approx(0.02), "spend was dropped instead of kept pending"
+        with pytest.raises(LLMBudgetExceeded, match="daily"):
+            check_budget(MODEL)
+
+    def test_failed_write_is_retained_not_discarded(self, monkeypatch, live_openai, clean_ledger):
+        import app.llm_budget as budget
+
+        monkeypatch.setattr(budget, "_write_batch", lambda *a: (_ for _ in ()).throw(RuntimeError("locked")))
+        monkeypatch.setattr(budget, "WRITE_ATTEMPTS", 2)
+        monkeypatch.setattr(budget, "RETRY_BACKOFF_SECONDS", 0)
+
+        budget.record_spend(200, 50, 0.001)
+        flush()
+        assert pending_cost() == pytest.approx(0.001)
+
+    def test_a_later_drain_recovers_pending_spend(self, monkeypatch, live_openai, clean_ledger, db_session):
+        """Contention is transient; once it clears the backlog must land."""
+        import app.llm_budget as budget
+        from app.models import LLMDailySpend
+
+        calls = {"n": 0}
+        real = budget._write_batch
+
+        def flaky(day, batch):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise RuntimeError("database is locked")
+            return real(day, batch)
+
+        monkeypatch.setattr(budget, "_write_batch", flaky)
+        monkeypatch.setattr(budget, "WRITE_ATTEMPTS", 1)
+        monkeypatch.setattr(budget, "RETRY_BACKOFF_SECONDS", 0)
+
+        budget.record_spend(200, 50, 0.001)
+        flush()
+        db_session.rollback()
+
+        # record_spend queues a drain and flush() queues another, so the
+        # retained batch is re-attempted without anything else intervening:
+        # the first drain fails and puts it back, the second writes it.
+        assert calls["n"] == 2
+        assert pending_cost() == 0.0, "spend stayed pending after contention cleared"
+        row = db_session.get(LLMDailySpend, _utc_today())
+        assert row.cost_usd == pytest.approx(0.001)
+
+    def test_several_calls_coalesce_into_one_write(self, monkeypatch, live_openai, clean_ledger, db_session):
+        """Fewer, bigger writes are what stops SQLite starving them."""
+        import app.llm_budget as budget
+        from app.models import LLMDailySpend
+
+        writes = []
+        real = budget._write_batch
+        monkeypatch.setattr(budget, "_write_batch",
+                            lambda day, batch: (writes.append(batch.calls), real(day, batch))[1])
+
+        for _ in range(5):
+            budget._add_pending(1, 200, 50, 0.001)
+        flush()
+        db_session.rollback()
+
+        assert len(writes) == 1, f"expected one coalesced write, got {writes}"
+        assert writes[0] == 5
+        row = db_session.get(LLMDailySpend, _utc_today())
+        assert row.calls == 5
+        assert row.cost_usd == pytest.approx(0.005)

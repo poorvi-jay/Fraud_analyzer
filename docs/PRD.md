@@ -216,6 +216,18 @@ days on the same sequencing.
   controls section). The provider decision and the guardrails around it
   arrived together on purpose: a shared key makes an uncapped demo
   everyone else's problem.
+
+  **Consequence for §8's technical success metric.** That metric asks for a
+  measurable improvement of the pipeline over the anomaly-only baseline.
+  The measurement in `ml/reports/` was taken with the mock context agent,
+  and switching production to a real LLM changed the pipeline's behaviour
+  substantially — escalation went from 0.71% in the report to 55% of a
+  60-transaction sample, because a stricter plausibility judge disagrees
+  with the anomaly model far more often. Re-measuring costs ~$5.13 per run,
+  more than the whole monthly budget, so the metric is satisfied for the
+  mock configuration and **unmeasured for the deployed one**. Recorded here
+  because a success metric that quietly changes meaning is worse than one
+  that is openly only partly met.
 - Whether the reviewer login is a single shared demo account or
   supports creating new reviewer accounts (affects Supabase Auth setup
   complexity slightly).
