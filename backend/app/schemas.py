@@ -3,6 +3,41 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from app.adapters.razorpay_adapter import to_major_units
+
+# Absolute slack for float noise when reconciling balances against amount.
+BALANCE_TOLERANCE = 0.01
+
+
+def check_balance_movement(amount: float, before: float, after: float) -> None:
+    """Refuse a balance that moved by more than the transaction amount.
+
+    build_features derives balance_drained_ratio from the two balances alone
+    and never looks at amount, so an unreconciled pair (a 900k transfer
+    alongside a 9.5M balance drop) is scored as if 9.5M left the account,
+    and its SHAP explanation then contradicts itself.
+
+    One-sided on purpose. abs() covers CASH_IN, where the balance rises.
+    Measured on the real PaySim CSV (6.36M rows): only 40.6% reconcile
+    exactly -- most of the rest move by LESS than the amount (accounts at
+    0.0 before and after, debits clamped at zero) -- so demanding equality
+    would reject most of the training distribution.
+
+    PaySim does also contain rows that move by MORE than the amount: 1.14%,
+    mostly CASH_IN and PAYMENT. Those are simulator artifacts, not something
+    a single real transaction can do, and this check refuses them anyway --
+    the model has seen a few, but they are not inputs worth accepting.
+    """
+    movement = abs(before - after)
+    if movement > amount + BALANCE_TOLERANCE:
+        raise ValueError(
+            f"balance moved by {movement:,.2f} (origin_balance_before={before:,.2f} -> "
+            f"origin_balance_after={after:,.2f}) but amount is only {amount:,.2f}. A single "
+            "transaction cannot move the origin balance by more than its own amount; "
+            "balance_drained_ratio is computed from the balances alone, so scoring this "
+            "would treat the whole balance movement as if this transaction caused it."
+        )
+
 
 class TransactionReviewRequest(BaseModel):
     user_id: str
@@ -15,6 +50,11 @@ class TransactionReviewRequest(BaseModel):
     # Only populated by ml/seed_demo_queue.py and the evaluation harness,
     # never by a real reviewer -- live demo transactions have no ground truth.
     is_fraud_ground_truth: bool | None = None
+
+    @model_validator(mode="after")
+    def _balances_reconcile(self):
+        check_balance_movement(self.amount, self.origin_balance_before, self.origin_balance_after)
+        return self
 
 
 class AgentOpinionOut(BaseModel):
@@ -121,6 +161,11 @@ class SimulateRequest(BaseModel):
             raise ValueError("either user_id or profile must be provided")
         return self
 
+    @model_validator(mode="after")
+    def _balances_reconcile(self):
+        check_balance_movement(self.amount, self.origin_balance_before, self.origin_balance_after)
+        return self
+
 
 class SimulateResponse(BaseModel):
     opinions: list[AgentOpinionOut]
@@ -196,6 +241,19 @@ class RazorpaySimulateRequest(BaseModel):
             "so a degraded score is never returned by accident."
         ),
     )
+
+    @model_validator(mode="after")
+    def _balances_reconcile(self):
+        # Checked here rather than on RazorpayBalanceContext because the
+        # amount lives on the payment, in minor units; the balances are major.
+        if self.balance_context is not None:
+            amount, _ = to_major_units(self.payment.amount, self.payment.currency)
+            check_balance_movement(
+                amount,
+                self.balance_context.origin_balance_before,
+                self.balance_context.origin_balance_after,
+            )
+        return self
 
 
 class RazorpaySimulateResponse(BaseModel):

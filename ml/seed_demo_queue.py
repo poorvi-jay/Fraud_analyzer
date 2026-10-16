@@ -47,7 +47,7 @@ def main():
     from app.llm_budget import flush, remaining
     from app.llm_usage import estimate_cost_usd, tracker
     from app.models import UserProfile
-    from app.schemas import TransactionReviewRequest
+    from app.schemas import BALANCE_TOLERANCE, TransactionReviewRequest
 
     init_db()  # before the budget read below: creates llm_daily_spend if missing
 
@@ -80,6 +80,14 @@ def main():
     profiles = pd.read_csv(DATA_DIR / "user_profiles.csv").set_index("user_id")
     transactions = pd.read_csv(DATA_DIR / "transactions.csv")
     transactions = transactions[transactions["user_id"].isin(profiles.index)]
+    # The API refuses rows whose balance moved by more than the amount (see
+    # check_balance_movement); ~1.1% of PaySim does. Drop them here rather
+    # than let each one fail mid-loop after its profile was already seeded.
+    movement = (transactions["origin_balance_before"] - transactions["origin_balance_after"]).abs()
+    reconciles = movement <= transactions["amount"] + BALANCE_TOLERANCE
+    print(f"Skipping {int((~reconciles).sum()):,} of {len(transactions):,} rows whose balance "
+          "moved by more than the amount (the API would refuse them).")
+    transactions = transactions[reconciles]
 
     def ensure_profile(user_id: str) -> bool:
         if db.get(UserProfile, user_id) is not None:

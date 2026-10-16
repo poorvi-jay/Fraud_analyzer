@@ -165,6 +165,74 @@ def test_simulate_unknown_user_returns_404(client):
     assert resp.status_code == 404
 
 
+def _simulate(client, **overrides):
+    payload = {
+        "profile": {
+            "home_country": "US",
+            "typical_transaction_amount": 200.0,
+            "travel_frequency": "never",
+            "account_age_days": 400,
+        },
+        "amount": 100.0,
+        "transaction_type": "PAYMENT",
+        "origin_balance_before": 500.0,
+        "origin_balance_after": 400.0,
+        "location_country": "US",
+        "occurred_at": "2024-06-15T10:00:00",
+    }
+    payload.update(overrides)
+    return client.post("/transactions/simulate", json=payload)
+
+
+def test_simulate_rejects_balance_drop_larger_than_amount(client):
+    # The playground case that produced a self-contradictory SHAP explanation.
+    resp = _simulate(
+        client,
+        amount=900_000.0,
+        transaction_type="TRANSFER",
+        origin_balance_before=9_500_000.0,
+        origin_balance_after=0.0,
+    )
+    assert resp.status_code == 422
+    assert "cannot move the origin balance by more than its own amount" in resp.text
+
+
+def test_review_rejects_unreconciled_balances_before_looking_up_the_user(client):
+    resp = client.post(
+        "/transactions/review",
+        json={
+            "user_id": "nobody",
+            "amount": 100.0,
+            "transaction_type": "PAYMENT",
+            "origin_balance_before": 500.0,
+            "origin_balance_after": 0.0,
+            "location_country": "US",
+        },
+    )
+    assert resp.status_code == 422
+
+
+def test_simulate_checks_cash_in_increase_against_amount(client):
+    assert _simulate(
+        client, transaction_type="CASH_IN", origin_balance_before=500.0, origin_balance_after=600.0
+    ).status_code == 200
+    assert _simulate(
+        client, transaction_type="CASH_IN", origin_balance_before=500.0, origin_balance_after=900.0
+    ).status_code == 422
+
+
+def test_simulate_tolerates_a_cent_of_float_noise(client):
+    assert _simulate(client, origin_balance_after=399.995).status_code == 200
+    assert _simulate(client, origin_balance_after=399.98).status_code == 422
+
+
+def test_simulate_allows_balance_moving_less_than_amount(client):
+    # PaySim is full of these (zero-balance accounts, debits clamped at 0);
+    # the check is one-sided so they are not rejected.
+    assert _simulate(client, origin_balance_before=0.0, origin_balance_after=0.0).status_code == 200
+    assert _simulate(client, origin_balance_before=60.0, origin_balance_after=0.0).status_code == 200
+
+
 def test_example_users_returns_list(client, sample_profile):
     resp = client.get("/transactions/example-users")
     assert resp.status_code == 200

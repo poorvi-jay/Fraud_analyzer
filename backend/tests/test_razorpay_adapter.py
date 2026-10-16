@@ -286,6 +286,34 @@ def test_unknown_customer_without_inline_profile_is_404(client):
     assert "spend history" in resp.json()["detail"]
 
 
+def test_balance_context_moving_more_than_the_payment_is_refused(client, razorpay_profile):
+    # 100000 paise = 1000.00 INR, so a 5000 -> 0 drop cannot be this payment.
+    resp = client.post(
+        "/transactions/razorpay/simulate",
+        json={
+            "payment": razorpay_test_payment(),
+            "balance_context": {"origin_balance_before": 5000.0, "origin_balance_after": 0.0},
+        },
+    )
+    assert resp.status_code == 422
+    assert "cannot move the origin balance by more than its own amount" in resp.text
+
+
+def test_balance_check_accepts_a_drop_equal_to_the_payment_in_major_units(
+    client, razorpay_profile
+):
+    # The refusal above only fires if the check converts paise to rupees
+    # (a raw 100000 would wave the 5000 drop through); this pins the boundary.
+    resp = client.post(
+        "/transactions/razorpay/simulate",
+        json={
+            "payment": razorpay_test_payment(),
+            "balance_context": {"origin_balance_before": 1000.0, "origin_balance_after": 0.0},
+        },
+    )
+    assert resp.status_code == 200, resp.text
+
+
 def test_razorpay_path_never_writes_to_the_database(client, razorpay_profile, db_session):
     from app.models import Transaction
 

@@ -22,7 +22,15 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     let detail = resp.statusText;
     try {
       const body = await resp.json();
-      if (body?.detail) detail = body.detail;
+      // FastAPI's own 422s carry a list of {loc, msg, type}, not a string;
+      // passing that to Error() would render as "[object Object]".
+      if (Array.isArray(body?.detail)) {
+        detail = body.detail
+          .map((e: { msg?: string }) => (e.msg ?? "").replace(/^Value error, /, ""))
+          .join("; ");
+      } else if (body?.detail) {
+        detail = body.detail;
+      }
     } catch {
       // body wasn't JSON -- fall back to statusText
     }
